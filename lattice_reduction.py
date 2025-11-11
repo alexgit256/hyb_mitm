@@ -88,7 +88,7 @@ class LatticeReduction:
             
 
             for t in range(bkz_tours): #pnj-bkz is oblivious to ntours
-                    print(f"Red. err. @beta={beta} tour:{t}")
+                    print(f"@beta={beta} tour:{t}")
                     pump_n_jump_bkz_tour(g6kobj, dummy_tracer, beta)
             self.B = G.B
 

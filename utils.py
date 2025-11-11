@@ -117,6 +117,22 @@ def from_canonical_scaled_start(M, t, dim=None, scale_fact=None):
 
     return t_*r_
 
+def proj_submatrix_modulus(G, v, dim=None):
+    """
+    """
+    if dim is None:
+        dim = G.B
+    v_gh = G.from_canonical(v)[-dim:]
+    c = G.babai(v,start=G.d-dim, gso=True)
+    v = G.to_canonical( (G.d-dim)*[0] + list(v_gh) )
+    
+    Bsub = IntegerMatrix.from_matrix( [G.B[i] for i in range(G.d-dim,G.d)] )
+    shift = Bsub.multiply_left( c )
+    shift_gh = G.from_canonical(shift)[-dim:]
+    shift = G.to_canonical((G.d-dim)*[0] + list(shift_gh))
+
+    return np.array( v ) - np.array( shift )
+
 def reduce_to_fund_par_proj(B_gs,t_gs,dim):
     t_gs_save = deepcopy( t_gs )
     c = [0 for i in range(dim)]

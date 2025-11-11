@@ -9,7 +9,7 @@ import json
 
 #   return A,b,q,s,e
 
-def generateLWEInstances(n,q,dist_s,dist_param_s,dist_e=None,dist_param_e=None,ntar=10):
+def generateLWEInstances(n,m,q,dist_s,dist_param_s,dist_e=None,dist_param_e=None,ntar=10):
     if dist_e is None:
        dist_e = dist_s
     if dist_param_e is None:
@@ -17,7 +17,7 @@ def generateLWEInstances(n,q,dist_s,dist_param_s,dist_e=None,dist_param_e=None,n
 
     A = []
     for _ in range(n):
-       a = np.array([ randrange(q) for _ in range(n) ])
+       a = np.array([ randrange(q) for _ in range(m) ])
        A.append(a)
     A = np.array(A)
 
@@ -40,11 +40,12 @@ def generateLWEInstances(n,q,dist_s,dist_param_s,dist_e=None,dist_param_e=None,n
         for _ in range(ntar):
           match str(dist_e):
               case "binomial":
-                  e = binomial_vec(n, dist_param_e)  
+                  e = binomial_vec(m, dist_param_e)  
               case "ternary":
-                  e = ternary_vec(n, dist_param_e)
+                  e = ternary_vec(m, dist_param_e)
               case "ternary_sparse":
-                  e = binomial_vec(n, 3) 
+                  e = [2*randrange(2)-1 for j in range(dist_param_e)] + (m-dist_param_e)*[0]
+                  shuffle(e)
               case _:
                   raise NotImplementedError("Distribution %s not implemented." % dist_e)
            
