@@ -227,17 +227,20 @@ class BatchAttackInstance:
             seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
             rng = random.Random(seed)
 
-            msk_sublen = rng.randrange(self.kappa//2, self.kappa)
-            msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
-            rng.shuffle(msk)
+            # msk_sublen = rng.randrange(self.kappa//2, self.kappa)
+            # msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
+            # rng.shuffle(msk)
 
             # ensure numpy arrays for elementwise ops
             s_corr_np = np.asarray(s_correct_guess)
-            msk_np = np.asarray(msk)
+            # msk_np = np.asarray(msk)
 
             if correct:
-                sguess_1 = s_corr_np * msk_np
+                s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
+                sguess_1 = s_delta
                 sguess_2 = sguess_1 - s_corr_np
+                # sguess_1 = s_corr_np * msk_np
+                # sguess_2 = sguess_1 - s_corr_np
             else:
                 sguess_1 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
                 sguess_2 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
@@ -387,17 +390,17 @@ def run_single_instance(idx: int,
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
-    n_lats = 5  # number of lattices
-    ntar = 10, ## per-lattice instances
-    n_trials = 50          # per-lattice-instance trials in check_pairs_guess_MM
+    n_lats = 5  # number of lattices    #5
+    ntar = 100, ## per-lattice instances #20
+    n_trials = 100          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q, n_tars = 130, 130, 3329, 20
+    n, m, q, n_tars = 125, 125, 3329, 20
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 30
     cd = 50
-    beta_max = 51
+    beta_max = 53
 
     os.makedirs(in_path, exist_ok=True)
 
@@ -455,8 +458,8 @@ def main():
 if __name__ == "__main__":
     try:
         results = main()
-        now = get_current_datetime
-        with open("res_{now}.pkl","wb") as file:
+        now = get_current_datetime()
+        with open(f"res_{now}.pkl","wb") as file:
             pickle.dump( results, file )
     except KeyboardInterrupt:
         print("\n[main] Interrupted by user (Ctrl+C). Exiting.")
