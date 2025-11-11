@@ -9,11 +9,31 @@ import time, random
 from time import perf_counter
 from random import randrange, shuffle
 import pickle
+import sys, os  # NEW
 
 from utils import *
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Any
 import concurrent.futures
+
+from datetime import datetime
+
+in_path = "./lwe_instances/saved_lattices/"
+
+def get_current_datetime():
+    """
+    Returns the current local date and time as a formatted string.
+    """
+    try:
+        # Get current local date and time
+        now = datetime.now()
+        
+        # Format: YYYY-MM-DD HH:MM:SS
+        formatted = now.strftime("%Y-%m-%d %H:%M:%S")
+        return formatted
+    except Exception as e:
+        return f"Error getting date and time: {e}"
 
 class BatchAttackInstance:
     def __init__(self, **kwargs):
@@ -117,13 +137,10 @@ class BatchAttackInstance:
         itnum=0
         for b, s, e in self.bse[start:end]:
             itnum+=1
-            print(f"lol: {(s@self.A+e-b)%self.q}")
             s_correct_guess = s[-self.kappa:]
             sec_proj = ( s_correct_guess @ self.C )
             t = np.concatenate( [b,(self.n-self.kappa)*[0]] )
             t -= sec_proj
-
-            print(t.shape)
             bab = G.babai(t)
 
             tshift = t - G.B.multiply_left(bab)
@@ -131,7 +148,6 @@ class BatchAttackInstance:
             diff = tshift-np.concatenate([e,-s[:-self.kappa]])
             if all( np.isclose(diff, 0.0, atol=1e-10) ):
                 succnum+=1
-            print(f"diff: {diff}")
         return succnum, itnum
     
     def check_correct_pairs_guess(self, start=0, end=None, n_trials=10):
@@ -153,27 +169,24 @@ class BatchAttackInstance:
                 msk_sublen = randrange(self.kappa//2-self.kappa//2+2)
                 msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
                 shuffle(msk)
-                # print(f"msk: {msk}")
+
                 sguess_1 = s_correct_guess*msk
                 sguess_2 = sguess_1 - s_correct_guess
-                # print(f"s: {s_correct_guess-(sguess_1-sguess_2)}")
-                # print(f"00: {s_correct_guess@self.C-np.concatenate( [b,(self.m-self.kappa)*[0]] )}")
 
                 sec_proj1 = ( sguess_1 @ self.C )
                 t1 = np.concatenate( [b,(self.n-self.kappa)*[0]] )
                 t1 -= sec_proj1
-                # print(t.shape)
+
                 bab = G.babai(t1)
                 tshift1 = t1 - G.B.multiply_left(bab)
 
                 sec_proj2 = ( sguess_2 @ self.C )
                 t2 = -sec_proj2
-                # print(t.shape)
+
                 bab = G.babai(t2)
                 tshift2 = t2 - G.B.multiply_left(bab) #should be close to tshift1 with some proba by assumption
 
                 d = tshift1-tshift2
-                # print(f"close? {(d@d)**0.5, np.max(np.abs(d))}")
                 infnrm = np.max(np.abs(d))
                 if (d@d)**0.5 < mindd:
                     mindd = (d@d)**0.5
@@ -183,12 +196,8 @@ class BatchAttackInstance:
                     print("- - - A - - -")
                     print(msk)
 
-                # t_correct_guess = (s_correct_guess @ self.C )
-                # t_correct_guess = np.concatenate( [b,(self.m-self.kappa)*[0]] ) - t_correct_guess
                 tmp = G.B.multiply_left( G.babai(t1-t2) )
                 tmp = (t1-t2)-tmp
-                # print(((tmp)))
-                # print((tshift1-tshift2))
             print(f"mindd, minddinf: {mindd, minddinf}")
             mindds.append(mindd)
             minddinfs.append(minddinf)
@@ -196,67 +205,10 @@ class BatchAttackInstance:
         print(minddinfs)
         print(f"gh: {gaussian_heuristic(G.r())**0.5}")
 
-    """
-    def check_correct_pairs_guess_MM(self, start=0, end=None, n_trials=10, n_workers=1):
-        Constructs correct guesses s=s1-s2 for the MitM attack on LWE and checks if Babai(t+s2) == Babai(s1)
-        n_trials: number of decompositions of s.
-        n_workers: number of parralel checks.
-        if end is None:
-            end = len(self.bse)
-        G = GSO.Mat( IntegerMatrix.from_matrix( self.H ), float_type="mpfr" )
-        G.update_gso()
-        succnum=0
-        itnum=0
-        mindds, minddinfs = [], []
-        for b, s, e in self.bse[start:end]:
-            mindd = self.q
-            minddinf = self.q
-            s_correct_guess = s[-self.kappa:]
-            for tries in range(n_trials):
-                if tries!=0 and tries%1000==0:
-                    print(f"{tries} out of {n_trials} done")
-                itnum+=1
-                msk_sublen = randrange(self.kappa//2-self.kappa//2+2)
-                msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
-                shuffle(msk)
-                sguess_1 = s_correct_guess*msk
-                sguess_2 = sguess_1 - s_correct_guess
-
-                sec_proj1 = ( sguess_1 @ self.C )
-                t1 = np.concatenate( [b,(self.n-self.kappa)*[0]] )
-                t1 -= sec_proj1
                 
-                tshift1 = proj_submatrix_modulus(G,t1,dim=self.cd)
-
-                sec_proj2 = ( sguess_2 @ self.C )
-                t2 = sec_proj2
-                
-                tshift2 = proj_submatrix_modulus(G,t2,dim=self.cd)
-
-                d = tshift1-tshift2
-                d =  np.array( G.from_canonical(d)[-self.cd:] )
-
-                print(f"close? {(d@d)**0.5, np.max(np.abs(d))} | {(tshift1@tshift1)**0.5, (tshift2@tshift2)**0.5}")
-                infnrm = np.max(np.abs(d))
-                if (d@d)**0.5 < mindd:
-                    mindd = (d@d)**0.5
-                if infnrm<minddinf:
-                    minddinf = infnrm
-                if infnrm < 4:
-                    print("- - - A - - -")
-                    print(msk)
-
-            print(f"mindd, minddinf: {mindd, minddinf}")
-            mindds.append(mindd)
-            minddinfs.append(minddinf)
-        print(mindds)
-        print(minddinfs)
-        print(f"gh: {gaussian_heuristic(G.r())**0.5}")
-    """
-                
-    def check_correct_pairs_guess_MM(self, start=0, end=None, n_trials=10, n_workers=1):
+    def check_pairs_guess_MM(self, start=0, end=None, correct=True, n_trials=10, n_workers=1):
         """
-        Constructs correct guesses s=s1-s2 for the MitM attack on LWE and checks if Babai(t+s2) == Babai(s1)
+        Constructs correct (if correct==True) guesses s=s1-s2 for the MitM attack on LWE and checks if Babai(t+s2) == Babai(s1)
         n_trials: number of decompositions of s.
         n_workers: number of parallel checks (threads).
         Returns:
@@ -275,18 +227,22 @@ class BatchAttackInstance:
             seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
             rng = random.Random(seed)
 
-            # replicate original mask length logic (original code produced 0 or 1 because expression reduces to 2)
-            msk_sublen = rng.randrange(self.kappa//2 - self.kappa//2 + 2)
+            msk_sublen = rng.randrange(self.kappa//2, self.kappa)
             msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
             rng.shuffle(msk)
 
-            # ensure numpy arrays for elementwise ops (keeps behaviour stable regardless of input type)
+            # ensure numpy arrays for elementwise ops
             s_corr_np = np.asarray(s_correct_guess)
             msk_np = np.asarray(msk)
-            sguess_1 = s_corr_np * msk_np
-            sguess_2 = sguess_1 - s_corr_np
 
-            # compute projections and shifts (exact same calls as original)
+            if correct:
+                sguess_1 = s_corr_np * msk_np
+                sguess_2 = sguess_1 - s_corr_np
+            else:
+                sguess_1 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
+                sguess_2 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
+
+            # compute projections and shifts
             sec_proj1 = ( sguess_1 @ self.C )
             t1 = np.concatenate( [b,(self.n-self.kappa)*[0]] )
             t1 -= sec_proj1
@@ -304,17 +260,16 @@ class BatchAttackInstance:
             eucl = (d @ d)**0.5
             infnrm = np.max(np.abs(d))
 
-            # return the distances so caller can reduce minima
             return eucl, infnrm
 
         # For each (b,s,e) in bse, run n_trials of _trial_worker (parallelised)
         for b, s, e in self.bse[start:end]:
-            mindd = self.q
-            minddinf = self.q
+            mindd = float('inf')
+            minddinf = float('inf')
             s_correct_guess = s[-self.kappa:]
 
             if n_workers is None or n_workers <= 1:
-                # sequential fallback (keeps original print behaviour)
+                # sequential fallback
                 for tries in range(n_trials):
                     if tries != 0 and tries % 1000 == 0:
                         print(f"{tries} out of {n_trials} done")
@@ -328,22 +283,16 @@ class BatchAttackInstance:
                         print("- - - A - - -")
             else:
                 # parallel execution using ThreadPoolExecutor
-                # use threads to avoid pickling heavy objects (G, mpfr, etc.)
                 with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                    # submit all trials
                     futures = { ex.submit(_trial_worker, tries, b, s_correct_guess): tries for tries in range(n_trials) }
 
-                    # as each completes, update minima (and optionally print progress)
-                    completed = 0
                     for fut in as_completed(futures):
                         tries = futures[fut]
-                        completed += 1
                         if tries != 0 and tries % 1000 == 0:
                             print(f"{tries} out of {n_trials} done")
                         try:
                             eucl, infnrm = fut.result()
                         except Exception as exc:
-                            # keep robust: print and continue
                             print(f"trial {tries} raised {exc!r}")
                             continue
 
@@ -351,9 +300,6 @@ class BatchAttackInstance:
                             mindd = eucl
                         if infnrm < minddinf:
                             minddinf = infnrm
-                        if infnrm < 4:
-                            print("- - - A - - -")
-                            print(f"(trial {tries} mask triggered small inf norm)")
 
             print(f"mindd, minddinf: {mindd, minddinf}")
             mindds.append(mindd)
@@ -363,23 +309,166 @@ class BatchAttackInstance:
         return minddinfs
 
 
-if __name__ == "__main__":
-    n, m, q, n_tars = 120, 120, 3329, 20
-    dist_s,dist_param_s,dist_e,dist_param_e = "ternary_sparse", 12, "binomial", 2
-    kappa = 20
-    cd = 32
-    lwe_instance = BatchAttackInstance(
-        n=n, m=m, q=q, n_tars=n_tars,
-        dist_s=dist_s,dist_param_s=dist_param_s,dist_e=dist_e,dist_param_e=dist_param_e,
-        kappa=kappa, cd=cd
-    )
+# NEW: worker to run one complete BatchAttackInstance experiment in a separate process
+def run_single_instance(idx: int,
+                        n: int, m: int, q: int, n_tars: int,
+                        dist_s: str, dist_param_s: int,
+                        dist_e: str, dist_param_e: int,
+                        kappa: int, cd: int,
+                        beta_max: int,
+                        seed_base: int,
+                        n_trials: int,
+                        ntar: int,
+                        inner_n_workers: int) -> Dict[str, Any]:
+    """
+    One worker:
+      - seeds RNG
+      - loads or creates + reduces a BatchAttackInstance
+      - runs check_correct_guess and check_pairs_guess_MM (correct/incorrect)
+      - returns summary dict
+    """
+    # per-instance seed (for reproducibility and diversity)
+    seed = seed_base + idx
+    random.seed(seed)
+    np.random.seed(seed)
 
-    for beta in list(range(30,31))+list(range(40,53,1)):
-        t0 = perf_counter()
-        lwe_instance.reduce(beta=beta,bkz_tours=2,cores=6,depth=4)
-        print(f"bkz-{beta} done in {perf_counter()-t0}")
-    print("chk0")
-    print( lwe_instance.check_correct_guess() )
-    lwe_instance.check_correct_pairs_guess_MM(n_trials=20, n_workers=5)
-            
+    # filename unique per instance
+    filename = f"lweinst_{n}_{m}_{q}_{dist_s}_{dist_param_s:.4f}_{dist_e}_{dist_param_e:.4f}_{kappa}_inst{idx}.pkl"
+    fullpath = os.path.join(in_path, filename)
+
+    # load or create instance
+    try:
+        lwe_instance = BatchAttackInstance.load_from_disc(fullpath)
+        loaded = True
+        print(f"[inst {idx}] loaded from {fullpath}")
+    except FileNotFoundError:
+        loaded = False
+        print(f"[inst {idx}] creating new instance (will save to {fullpath})")
+        lwe_instance = BatchAttackInstance(
+            n=n, m=m, q=q, n_tars=n_tars,
+            dist_s=dist_s, dist_param_s=dist_param_s,
+            dist_e=dist_e, dist_param_e=dist_param_e,
+            kappa=kappa, cd=cd, ntar=ntar
+        )
+
+        # same beta schedule as your original code: 30, then 40..beta_max-1
+        for beta in list(range(30, 31)) + list(range(40, beta_max, 1)):
+            t0 = perf_counter()
+            lwe_instance.reduce(beta=beta, bkz_tours=2, cores=6, depth=4)
+            print(f"[inst {idx}] bkz-{beta} done in {perf_counter()-t0:.2f}s")
+
+        # save reduced instance to disk so future runs can reuse it
+        os.makedirs(in_path, exist_ok=True)
+        lwe_instance.dump_on_disc(fullpath)
+        print(f"[inst {idx}] dumped to {fullpath}")
+
+    # run experiments
+    print(f"[inst {idx}] check_correct_guess()")
+    succnum, itnum = lwe_instance.check_correct_guess()
+    print(f"[inst {idx}] check_correct_guess -> ({succnum}, {itnum})")
+
+    print(f"[inst {idx}] check_pairs_guess_MM(correct=True)")
+    infdiff_correct = lwe_instance.check_pairs_guess_MM(n_trials=n_trials, n_workers=inner_n_workers, correct=True)
+
+    print(f"[inst {idx}] check_pairs_guess_MM(correct=False)")
+    infdiff_incorrect = lwe_instance.check_pairs_guess_MM(correct=False, n_trials=n_trials, n_workers=inner_n_workers)
+
+    return {
+        "idx": idx,
+        "seed": seed,
+        "filename": filename,
+        "succnum": succnum,
+        "itnum": itnum,
+        "infdiff_correct": infdiff_correct,
+        "infdiff_incorrect": infdiff_incorrect,
+        "loaded": loaded,
+    }
+
+def main():
+    # outer parallelism: number of independent BatchAttackInstance runs
+    max_workers = 2  # set this >1 to parallelize across instances
+    n_lats = 5  # number of lattices
+    ntar = 10, ## per-lattice instances
+    n_trials = 50          # per-lattice-instance trials in check_pairs_guess_MM
+    inner_n_workers = 5    # threads for inner parallelism
+
+    n, m, q, n_tars = 130, 130, 3329, 20
+    seed_base = 0
+    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
+    kappa = 30
+    cd = 50
+    beta_max = 51
+
+    os.makedirs(in_path, exist_ok=True)
+
+    results = []
+    # use processes for independent instances (CPU-bound)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(
+                run_single_instance,
+                idx,
+                n, m, q, n_tars,
+                dist_s, dist_param_s,
+                dist_e, dist_param_e,
+                kappa, cd,
+                beta_max,
+                seed_base,
+                n_trials,
+                ntar,
+                inner_n_workers
+            ): idx
+            for idx in range(n_lats)
+        }
+
+        try:
+            for fut in concurrent.futures.as_completed(futures):
+                idx = futures[fut]
+                try:
+                    res = fut.result()
+                except Exception as e:
+                    print(f"[main] instance {idx} raised {e!r}")
+                    res = {"idx": idx, "error": repr(e)}
+                results.append(res)
+        except KeyboardInterrupt:
+            print("\n[main] Caught KeyboardInterrupt, cancelling workers...")
+            # cancel all pending futures
+            for f in futures:
+                f.cancel()
+            # tell the executor to stop without waiting for the workers
+            executor.shutdown(wait=False, cancel_futures=True)
+            # re-raise so outer handler can catch it
+            raise
+
+    # compact summary
+    for r in results:
+        if "error" in r:
+            print(f"instance {r['idx']} ERROR: {r['error']}")
+        else:
+            print(f"instance {r['idx']} (seed {r['seed']}, file {r['filename']}, loaded={r['loaded']})")
+            print(f"  check_correct_guess: ({r['succnum']}, {r['itnum']})")
+            print(f"  infdiff_correct  (len {len(r['infdiff_correct'])}): {r['infdiff_correct']}")
+            print(f"  infdiff_incorrect(len {len(r['infdiff_incorrect'])}): {r['infdiff_incorrect']}")
+
+    return results
+
+if __name__ == "__main__":
+    try:
+        results = main()
+        now = get_current_datetime
+        with open("res_{now}.pkl","wb") as file:
+            pickle.dump( results, file )
+    except KeyboardInterrupt:
+        print("\n[main] Interrupted by user (Ctrl+C). Exiting.")
+        sys.exit(1)
+
+    # compact summary
+    for r in results:
+        if "error" in r:
+            print(f"instance {r['idx']} ERROR: {r['error']}")
+        else:
+            print(f"instance {r['idx']} (seed {r['seed']}, file {r['filename']}, loaded={r['loaded']})")
+            print(f"  check_correct_guess: ({r['succnum']}, {r['itnum']})")
+            print(f"  infdiff_correct  (len {len(r['infdiff_correct'])}): {r['infdiff_correct']}")
+            print(f"  infdiff_incorrect(len {len(r['infdiff_incorrect'])}): {r['infdiff_incorrect']}")
         
