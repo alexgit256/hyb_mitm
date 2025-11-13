@@ -288,16 +288,7 @@ class BatchAttackInstance:
             sec_proj1 = ( sguess_1 @ self.C )
             t = np.concatenate( [b,(self.n-self.kappa)*[0]] )
             tshift1 = proj_submatrix_modulus(G,t-sec_proj1,dim=self.cd)
-
-            # babt = proj_submatrix_modulus(G,t1-sec_proj1,dim=self.cd) #error coming from t
-            # babsec_proj1 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd) #error coming from A2
-            # true_err = proj_submatrix_modulus(G, np.concatenate([e,-s[:-self.kappa]]), dim=self.cd ) #true error
-            # if all( np.isclose((true_err - (babt + babsec_proj1)), 0.0, atol=1e-7) ):
-            #     print(f"Admissible pair!")
-            # else: 
-            #     pass
                 
-
             sec_proj2 = ( sguess_2 @ self.C )
             t2 = sec_proj2
             tshift2 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
@@ -315,7 +306,7 @@ class BatchAttackInstance:
             is_adm = False
             if all(np.isclose(proj_submatrix_modulus(G,lol2,dim=self.cd),0.0,atol=0.001)):
                 is_adm=True
-            assert all(np.isclose(proj_submatrix_modulus(G,lol2,dim=self.cd),0.0,atol=0.001)), f"Babai is wrong"
+            # assert all(np.isclose(proj_submatrix_modulus(G,lol2,dim=self.cd),0.0,atol=0.001)), f"Babai is wrong"
 
             eucl = (d @ d)**0.5
             infnrm = np.max(np.abs(d))
@@ -324,6 +315,7 @@ class BatchAttackInstance:
 
         # For each (b,s,e) in bse, run n_trials of _trial_worker (parallelised)
         is_adm_num = 0
+        is_adm_nums = []
         for b, s, e in self.bse[start:end]:
             mindd = float('inf')
             minddinf = float('inf')
@@ -347,7 +339,7 @@ class BatchAttackInstance:
 
                     for fut in as_completed(futures):
                         tries = futures[fut]
-                        if tries != 0 and tries % 1000 == 0:
+                        if tries != 0 and tries % 200 == 0:
                             print(f"{tries} out of {n_trials} done")
                         try:
                             eucl, infnrm, is_adm= fut.result()
@@ -361,6 +353,9 @@ class BatchAttackInstance:
                             minddinf = infnrm
 
             print(f"mindd, minddinf: {mindd, minddinf}")
+            print(f"is_adm_num: {is_adm_num} | {n_trials}")
+            is_adm_nums.append(is_adm_num)
+            is_adm_num = 0
             mindds.append(mindd)
             minddinfs.append(minddinf)
         print(mindds)
@@ -434,10 +429,10 @@ def run_single_instance(idx: int,
     print(f"[inst {idx}] check_correct_guess_w_babai -> ({succnum}, {itnum})")
 
     print(f"[inst {idx}] check_pairs_guess_MM(correct=True)")
-    infdiff_correct, mindds_correct, is_adm_num = lwe_instance.check_pairs_guess_MM(n_trials=n_trials, n_workers=inner_n_workers, correct=True)
+    infdiff_correct, mindds_correct, is_adm_num_correct = lwe_instance.check_pairs_guess_MM(n_trials=n_trials, n_workers=inner_n_workers, correct=True)
 
     print(f"[inst {idx}] check_pairs_guess_MM(correct=False)")
-    infdiff_incorrect, mindds_incorrect = lwe_instance.check_pairs_guess_MM(correct=False, n_trials=n_trials, n_workers=inner_n_workers)
+    infdiff_incorrect, mindds_incorrect, is_adm_num_incorrect = lwe_instance.check_pairs_guess_MM(correct=False, n_trials=n_trials, n_workers=inner_n_workers)
 
     return {
         "idx": idx,
@@ -448,7 +443,8 @@ def run_single_instance(idx: int,
         'beta_max': beta_max,
         'n_trials': n_trials,
         "filename": filename,
-        "is_adm_num": is_adm_num,
+        "is_adm_num_correct": is_adm_num_correct,
+        "is_adm_num_incorrect": is_adm_num_incorrect,
         "succnum": succnum,
         "itnum": itnum,
         "infdiff_correct": infdiff_correct,
@@ -463,15 +459,15 @@ def main():
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
     n_tars = 10 ## per-lattice instances #20
-    n_trials = 1000          # per-lattice-instance trials in check_pairs_guess_MM
+    n_trials = 150          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 128, 128, 3329
+    n, m, q = 144, 144, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 30
     cd = 45
-    beta_max = 48
+    beta_max = 46
 
     os.makedirs(in_path, exist_ok=True)
 
@@ -503,6 +499,7 @@ def main():
                 except Exception as e:
                     print(f"[main] instance {idx} raised {e!r}")
                     res = {"idx": idx, "error": repr(e)}
+                    raise e
                 results.append(res)
         except KeyboardInterrupt:
             print("\n[main] Caught KeyboardInterrupt, cancelling workers...")
