@@ -46,15 +46,27 @@ class LatticeReduction:
         self.B = flatter_interface( IntegerMatrix.from_matrix( B ) )
 
 
-    def __call__(self, lll_size  = 64, delta: float = 0.99, cores  = 1, debug  = False,
+    def __call__(self, lll_size  = 64, delta: float = 0.99, start=0, end=None, cores  = 1, debug  = False,
         verbose  = False, logfile  = None, anim  = None, depth  = 0,
-        use_seysen  = False, beta=2, bkz_tours=1, bkz_size=64, **kwds):
-        
+        use_seysen  = False, beta=2, bkz_tours=1, **kwds):
+        """
+        Reduces self.B.
+        lll_size: sub-LLL blocksize.
+        delta: LLL delta.
+        start: start reduction at.
+        end: end reduction before.
+        beta: BKZ blocksize
+        bkz_tours: number of BKZ tours.
+        """
+        if end is None or end==-1:
+            end = self.B.nrows
+
         use_blaster=True
+        B_trunc = IntegerMatrix.from_matrix( [self.B[i] for i in range(start,end)] )
         if beta<40:
-            G = GSO.Mat(self.B, float_type="dd",
-            U=IntegerMatrix.identity(self.B.nrows, int_type=self.B.int_type),
-            UinvT=IntegerMatrix.identity(self.B.nrows, int_type=self.B.int_type))
+            G = GSO.Mat(B_trunc, float_type="dd",
+            U=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type),
+            UinvT=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type))
             G.update_gso()
             lll = LLL.Reduction(G)
             lll()
@@ -67,48 +79,28 @@ class LatticeReduction:
                 flags=BKZ_FPYLLL.MAX_LOOPS
             )
             bkz(par)
+            B_trunc = bkz.M.B
 
-            self.B = bkz.M.B
         elif beta<65 and use_blaster:
-            # print( np.array([list(b) for b in self.B]).shape[1] )
-            self.B = reduce(np.array([list(tmp) for tmp in self.B]).transpose(), lll_size=lll_size, delta=delta, cores=cores, debug=debug,
+            B_trunc= reduce(np.array([list(tmp) for tmp in B_trunc]).transpose(), lll_size=lll_size, delta=delta, cores=cores, debug=debug,
             verbose=verbose, logfile=logfile, anim=None, depth=depth,
             use_seysen=use_seysen, bkz_tours=bkz_tours, beta=beta)[1].transpose()
-            self.B=IntegerMatrix.from_matrix(self.B)
         else:
-            G = GSO.Mat(self.B, float_type="dd", #WARNING: this will fail on ARM
-            U=IntegerMatrix.identity(self.B.nrows, int_type=self.B.int_type),
-            UinvT=IntegerMatrix.identity(self.B.nrows, int_type=self.B.int_type))
+            G = GSO.Mat(B_trunc, float_type="dd", #WARNING: this will fail on ARM
+            U=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type),
+            UinvT=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type))
             G.update_gso()
             
             params_sieve = SieverParams()
             params_sieve['threads'] = cores
 
             g6kobj = Siever(G, params_sieve)
+            B_trunc = G.B
             
 
             for t in range(bkz_tours): #pnj-bkz is oblivious to ntours
                     print(f"@beta={beta} tour:{t}")
                     pump_n_jump_bkz_tour(g6kobj, dummy_tracer, beta)
-            self.B = G.B
+        self.B = IntegerMatrix.from_matrix( [self.B[i] for i in range(start)] + [b for b in B_trunc] + [self.B[i] for i in range(end,self.B.nrows)] )
 
-            """
-            G = GSO.Mat(self.B, float_type="mpfr",
-            U=IntegerMatrix.identity(self.B.nrows, int_type=self.B.int_type),
-            UinvT=IntegerMatrix.identity(self.B.nrows, int_type=self.B.int_type))
-            G.update_gso()
-            lll = LLL.Reduction(G)
-            lll()
-
-            bkz = BKZReduction( G )
-            par = BKZ_FPYLLL.Param(
-                beta,
-                strategies=BKZ_FPYLLL.DEFAULT_STRATEGY,
-                max_loops=bkz_tours,
-                flags=BKZ_FPYLLL.MAX_LOOPS
-            )
-            bkz(par)
-
-            self.B = bkz.M.B
-            """
         return self.B

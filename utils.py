@@ -117,21 +117,41 @@ def from_canonical_scaled_start(M, t, dim=None, scale_fact=None):
 
     return t_*r_
 
-def proj_submatrix_modulus(G, v, dim=None):
+# def proj_submatrix_modulus(G, v, dim=None):
+#     """
+#     """
+#     if dim is None:
+#         dim = G.B.nrows
+#     v_gh = (G.B.nrows-dim)*[0] + G.from_canonical(v)[-dim:]
+#     c = G.babai(v,start=G.d-dim, gso=True)
+#     v = G.to_canonical( (G.d-dim)*[0] + list(v_gh) )
+    
+#     Bsub = IntegerMatrix.from_matrix( [G.B[i] for i in range(G.d-dim,G.d)] )
+#     shift = Bsub.multiply_left( c )
+#     shift_gh = G.from_canonical(shift)[-dim:]
+#     shift = G.to_canonical((G.d-dim)*[0] + list(shift_gh))
+
+#     return np.array( v ) - np.array( shift )
+
+def proj_submatrix_modulus(G, v, dim=None, coords_too=False):
     """
+    Given GSO object G and target vector v:
+    1) Projects v onto last dim GS vectors of G.B
+    2) Finds vector bab_gh from Lat(last dim GS) close to v
+    3) Returns v - bab_gh
     """
     if dim is None:
-        dim = G.B
-    v_gh = G.from_canonical(v)[-dim:]
-    c = G.babai(v,start=G.d-dim, gso=True)
-    v = G.to_canonical( (G.d-dim)*[0] + list(v_gh) )
-    
-    Bsub = IntegerMatrix.from_matrix( [G.B[i] for i in range(G.d-dim,G.d)] )
-    shift = Bsub.multiply_left( c )
-    shift_gh = G.from_canonical(shift)[-dim:]
-    shift = G.to_canonical((G.d-dim)*[0] + list(shift_gh))
+        dim = G.B.nrows
+    v_gh = (G.B.nrows-dim)*[0] + list( G.from_canonical(v)[-dim:] ) #project v onto last dim GS vectors
+    v_gh = np.asarray( G.to_canonical( v_gh ) ) #go back to canonical
+    c = G.babai(v, gso=False)[-dim:] #do babai and take last dim coords (TODO: wth does "start" keyword mean?)
+    bab_gh = (G.B.nrows-dim)*[0] + list( G.from_canonical( G.B[-dim:].multiply_left(c) )[-dim:] ) #project the close vec onto last dim GS vectors
+    bab_gh = G.to_canonical( bab_gh )
+    v_gh -= np.asarray( bab_gh ) #substract close lat vect from proj of v
 
-    return np.array( v ) - np.array( shift )
+    if coords_too:
+          return v_gh, c
+    return v_gh
 
 def reduce_to_fund_par_proj(B_gs,t_gs,dim):
     t_gs_save = deepcopy( t_gs )
