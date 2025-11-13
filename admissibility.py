@@ -304,7 +304,7 @@ class BatchAttackInstance:
             lol = proj_submatrix_modulus(G,npsp1-true_err_gh,dim=self.cd)
             lol2 = ( (lol) - npsp1 + true_err_gh )
             is_adm = False
-            if all(np.isclose(proj_submatrix_modulus(G,lol2,dim=self.cd),0.0,atol=0.001)):
+            if all(np.isclose(lol2,0.0,atol=0.001)):
                 is_adm=True
             # assert all(np.isclose(proj_submatrix_modulus(G,lol2,dim=self.cd),0.0,atol=0.001)), f"Babai is wrong"
 
@@ -459,15 +459,15 @@ def main():
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
     n_tars = 10 ## per-lattice instances #20
-    n_trials = 150          # per-lattice-instance trials in check_pairs_guess_MM
+    n_trials = 250          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 144, 144, 3329
+    n, m, q = 125, 125, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 30
     cd = 45
-    beta_max = 46
+    beta_max = 48
 
     os.makedirs(in_path, exist_ok=True)
 
