@@ -265,21 +265,20 @@ class BatchAttackInstance:
             seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
             rng = random.Random(seed)
 
-            msk_sublen = rng.randrange(self.kappa//2, self.kappa)
-            msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
-            # msk = (self.kappa)*[1]
-            rng.shuffle(msk)
+            # msk_sublen = rng.randrange(self.kappa//2, self.kappa)
+            # msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
+            # rng.shuffle(msk)
 
             # ensure numpy arrays for elementwise ops
             s_corr_np = np.asarray(s_correct_guess)
-            msk_np = np.asarray(msk)
+            # msk_np = np.asarray(msk)
 
             if correct:
-                # s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
-                # sguess_1 = s_delta
-                # sguess_2 = sguess_1 - s_corr_np
-                sguess_1 = s_corr_np * msk_np
+                s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
+                sguess_1 = s_delta
                 sguess_2 = sguess_1 - s_corr_np
+                # sguess_1 = s_corr_np * msk_np
+                # sguess_2 = sguess_1 - s_corr_np
             else:
                 sguess_1 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
                 sguess_2 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
@@ -290,8 +289,7 @@ class BatchAttackInstance:
             tshift1 = proj_submatrix_modulus(G,t-sec_proj1,dim=self.cd)
                 
             sec_proj2 = ( sguess_2 @ self.C )
-            t2 = sec_proj2
-            tshift2 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
+            tshift2 = -proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
 
             d = tshift1 - tshift2  #NP(t-sec_proj1) + NP(sec_proj2) =conj= NP(t) - ( NP(sec_proj1)-NP(sec_proj2) )
             d = G.from_canonical( d )
@@ -360,7 +358,7 @@ class BatchAttackInstance:
             minddinfs.append(minddinf)
         print(mindds)
         print(minddinfs)
-        return minddinfs, mindds, is_adm_num
+        return minddinfs, mindds, is_adm_nums
 
 
 # NEW: worker to run one complete BatchAttackInstance experiment in a separate process
@@ -449,8 +447,8 @@ def run_single_instance(idx: int,
         "itnum": itnum,
         "infdiff_correct": infdiff_correct,
         "infdiff_incorrect": infdiff_incorrect,
-        "mindds_correct": infdiff_correct,
-        "mindds_incorrect": infdiff_incorrect,
+        "mindds_correct": mindds_correct,
+        "mindds_incorrect": mindds_incorrect,
         "loaded": loaded,
     }
 
