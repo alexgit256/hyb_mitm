@@ -1,3 +1,5 @@
+USE_MASK = True
+
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
 import numpy as np
@@ -265,20 +267,23 @@ class BatchAttackInstance:
             seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
             rng = random.Random(seed)
 
-            # msk_sublen = rng.randrange(self.kappa//2, self.kappa)
-            # msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
-            # rng.shuffle(msk)
+            
 
             # ensure numpy arrays for elementwise ops
             s_corr_np = np.asarray(s_correct_guess)
-            # msk_np = np.asarray(msk)
 
             if correct:
-                s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
-                sguess_1 = s_delta
-                sguess_2 = sguess_1 - s_corr_np
-                # sguess_1 = s_corr_np * msk_np
-                # sguess_2 = sguess_1 - s_corr_np
+                if USE_MASK:
+                    msk_sublen = rng.randrange(self.kappa//2, self.kappa)
+                    msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
+                    rng.shuffle(msk)
+                    msk_np = np.asarray(msk)
+                    sguess_1 = s_corr_np * msk_np
+                    sguess_2 = sguess_1 - s_corr_np
+                else:
+                    s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
+                    sguess_1 = s_delta
+                    sguess_2 = sguess_1 - s_corr_np                   
             else:
                 sguess_1 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
                 sguess_2 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
@@ -439,6 +444,12 @@ def run_single_instance(idx: int,
         'm': m,
         'q': q,
         'beta_max': beta_max,
+        'kappa': kappa,
+        'cd': cd,
+        'dists': {
+            "dist_s": dist_s, "dist_param_s": dist_param_s,
+            "dist_e": dist_e, "dist_param_e": dist_param_e,
+        },
         'n_trials': n_trials,
         "filename": filename,
         "is_adm_num_correct": is_adm_num_correct,

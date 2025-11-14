@@ -137,7 +137,31 @@ def proj_submatrix_modulus(G, v, dim=None, coords_too=False):
     """
     Given GSO object G and target vector v:
     1) Projects v onto last dim GS vectors of G.B
-    2) Finds vector bab_gh from Lat(last dim GS) close to v
+    2) Finds vector bab_gh from Lat(last dim GS) close to v with Babai
+    3) Returns v - bab_gh
+    """
+    d = G.B.nrows
+    if dim is None:
+        dim = d
+    elif not (1 <= dim <= d):
+        raise ValueError("dim must be in [1, G.B.nrows]")
+
+    v_gh = (G.B.nrows-dim)*[0] + list( G.from_canonical(v,start=d-dim) ) #project v onto last dim GS vectors
+    v_gh = np.asarray( G.to_canonical( v_gh ) ) #go back to canonical
+    c = G.babai(v, gso=False, start=d-dim, dimension=dim) #do babai and take last dim coords (TODO: wth does "start" keyword mean?)
+    bab_gh = (G.B.nrows-dim)*[0] + list( G.from_canonical( G.B[-dim:].multiply_left(c) )[-dim:] ) #project the close vec onto last dim GS vectors
+    bab_gh = G.to_canonical( bab_gh )
+    v_gh -= np.asarray( bab_gh ) #substract close lat vect from proj of v
+
+    if coords_too:
+          return v_gh, c
+    return v_gh
+
+def proj_submatrix_modulus_partenum(G, v, dim=None, coords_too=False):
+    """
+    Given GSO object G and target vector v:
+    1) Projects v onto last dim GS vectors of G.B
+    2) Finds vector bab_gh from Lat(last dim GS) close to v with partial enumeration + Babai
     3) Returns v - bab_gh
     """
     if dim is None:
