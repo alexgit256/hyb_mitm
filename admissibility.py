@@ -14,6 +14,7 @@ import pickle
 import sys, os  # NEW
 
 from utils import *
+from math import log,e, pi
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any
@@ -377,7 +378,7 @@ def run_single_instance(idx: int,
                         n_trials: int,
                         ntar: int,
                         inner_n_workers: int,
-                        verify_min_gh=0.6) -> Dict[str, Any]:
+                        verify_min_gh=0.48) -> Dict[str, Any]:
     """
     One worker:
       - seeds RNG
@@ -419,7 +420,7 @@ def run_single_instance(idx: int,
             nrmper = np.percentile( nrms, 0.95 ) * ( lwe_instance.cd / (n+m) )**2
 
         # same beta schedule as your original code: 30, then 40..beta_max-1
-        for beta in list(range(40, beta_max, 1)):
+        for beta in list(range(40, beta_max+1, 1)):
             t0 = perf_counter()
             lwe_instance.reduce(beta=beta, bkz_tours=2, 
                                 cores=6, depth=4,
@@ -429,8 +430,9 @@ def run_single_instance(idx: int,
             if verify_min_gh:
                 G = GSO.Mat( lwe_instance.H, float_type="dd" )
                 G.update_gso()
-                gh_sub = gaussian_heuristic( G.r()[-lwe_instance.cd:] )
-                tmp = verify_min_gh**2 * gh_sub
+                # gh_sub = gaussian_heuristic( G.r()[-lwe_instance.cd:] )
+                gh_sub = np.min( G.r() )
+                tmp = verify_min_gh**2 * gh_sub * lwe_instance.cd/(2*log(lwe_instance.cd,2.71828))
                 if nrmper <= tmp:
                     print(f"Stopped lattice reduction: {nrmper} <= {tmp}")
                     break
@@ -494,12 +496,12 @@ def main():
     n_trials = 300          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 130, 130, 3329
+    n, m, q = 150, 150, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 30
-    cd = 45
-    beta_max = 51
+    cd = 50
+    beta_max = 61
 
     os.makedirs(in_path, exist_ok=True)
 
