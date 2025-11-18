@@ -1,4 +1,4 @@
-USE_MASK = True
+USE_MASK = False
 
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
@@ -376,7 +376,8 @@ def run_single_instance(idx: int,
                         seed_base: int,
                         n_trials: int,
                         ntar: int,
-                        inner_n_workers: int) -> Dict[str, Any]:
+                        inner_n_workers: int,
+                        verify_min_gh=0.6) -> Dict[str, Any]:
     """
     One worker:
       - seeds RNG
@@ -408,18 +409,40 @@ def run_single_instance(idx: int,
             kappa=kappa, cd=cd, ntar=ntar
         )
 
+        if verify_min_gh:
+            # vefifies
+            nrms = []
+            for _, s, e in lwe_instance.bse:
+                v = np.concatenate([s,e])
+                nrms.append( v@v )
+            #estimation of projected length (95th percentile)
+            nrmper = np.percentile( nrms, 0.95 ) * ( lwe_instance.cd / (n+m) )**2
+
         # same beta schedule as your original code: 30, then 40..beta_max-1
-        for beta in list(range(30, 31)) + list(range(40, beta_max, 1)):
+        for beta in list(range(40, beta_max, 1)):
             t0 = perf_counter()
             lwe_instance.reduce(beta=beta, bkz_tours=2, 
                                 cores=6, depth=4,
                                 start=0, end=None)
             print(f"[inst {idx}] bkz-{beta} done in {perf_counter()-t0:.2f}s")
 
+            if verify_min_gh:
+                G = GSO.Mat( lwe_instance.H, float_type="dd" )
+                G.update_gso()
+                gh_sub = gaussian_heuristic( G.r()[-lwe_instance.cd:] )
+                tmp = verify_min_gh**2 * gh_sub
+                if nrmper <= tmp:
+                    print(f"Stopped lattice reduction: {nrmper} <= {tmp}")
+                    break
+                else:
+                    print(f"Continuing lattice reduction: {nrmper} > {tmp}")
+            
+
         # save reduced instance to disk so future runs can reuse it
         os.makedirs(in_path, exist_ok=True)
         lwe_instance.dump_on_disc(fullpath)
         print(f"[inst {idx}] dumped to {fullpath}")
+
 
     # run experiments
     print(f"[inst {idx}] check_correct_guess()")
@@ -467,16 +490,16 @@ def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 10 ## per-lattice instances #20
-    n_trials = 250          # per-lattice-instance trials in check_pairs_guess_MM
+    n_tars = 20 ## per-lattice instances #20
+    n_trials = 300          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 125, 125, 3329
+    n, m, q = 130, 130, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 30
     cd = 45
-    beta_max = 48
+    beta_max = 51
 
     os.makedirs(in_path, exist_ok=True)
 
