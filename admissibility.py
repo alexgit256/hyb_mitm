@@ -1,4 +1,4 @@
-USE_MASK = False
+USE_MASK = True
 
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
@@ -280,36 +280,42 @@ class BatchAttackInstance:
                     rng.shuffle(msk)
                     msk_np = np.asarray(msk)
                     sguess_1 = s_corr_np * msk_np
-                    sguess_2 = sguess_1 - s_corr_np
+                    sguess_2 = -sguess_1 + s_corr_np
                 else:
                     s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
                     sguess_1 = s_delta
-                    sguess_2 = sguess_1 - s_corr_np                   
+                    sguess_2 = -sguess_1 + s_corr_np                   
             else:
                 sguess_1 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
                 sguess_2 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
 
             # compute projections and shifts
             sec_proj1 = ( sguess_1 @ self.C )
-            t = np.concatenate( [b,(self.n-self.kappa)*[0]] )
-            tshift1 = proj_submatrix_modulus(G,t-sec_proj1,dim=self.cd)
+            t1 = np.concatenate( [b,(self.n-self.kappa)*[0]] )
+            tshift1 = proj_submatrix_modulus(G,t1-sec_proj1,dim=self.cd)
                 
             sec_proj2 = ( sguess_2 @ self.C )
-            tshift2 = -proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
+            true_err = np.concatenate([e,-s[:-self.kappa]])
+            tshift2 = proj_submatrix_modulus(G,sec_proj2+true_err,dim=self.cd)
 
-            d = tshift1 - tshift2  #NP(t-sec_proj1) + NP(sec_proj2) =conj= NP(t) - ( NP(sec_proj1)-NP(sec_proj2) )
+            d = tshift1 - tshift2  
             d = G.from_canonical( d )
             d = (self.H.nrows-self.cd)*[0] + list(d[-self.cd:])
             d = np.asarray( G.to_canonical(d) )
 
-            true_err = np.concatenate([e,-s[:-self.kappa]])
-            true_err_gh = proj_submatrix_modulus(G,true_err,dim=self.cd)
-            npsp1 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd)
-            lol = proj_submatrix_modulus(G,npsp1-true_err_gh,dim=self.cd)
-            lol2 = ( (lol) - npsp1 + true_err_gh )
+            #tshift1
             is_adm = False
-            if all(np.isclose(lol2,0.0,atol=0.001)):
+            tmp1 = proj_submatrix_modulus(G,t1,dim=self.cd)
+            tmp2 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd)
+            if all(np.isclose(tshift1 - tmp2+tmp1,0.0,atol=0.001)):
                 is_adm=True
+
+            #tshift1
+            tmp1 = proj_submatrix_modulus(G,t1,dim=self.cd)
+            tmp2 = proj_submatrix_modulus(G,true_err,dim=self.cd)
+            is_adm = False
+            if all(np.isclose(tshift2 - tmp1-tmp2,0.0,atol=0.001)):
+                is_adm_ &= True
             # assert all(np.isclose(proj_submatrix_modulus(G,lol2,dim=self.cd),0.0,atol=0.001)), f"Babai is wrong"
 
             eucl = (d @ d)**0.5
@@ -496,12 +502,12 @@ def main():
     n_trials = 300          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 150, 150, 3329
+    n, m, q = 130, 130, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 30
     cd = 50
-    beta_max = 61
+    beta_max = 64
 
     os.makedirs(in_path, exist_ok=True)
 
