@@ -284,7 +284,7 @@ class BatchAttackInstance:
                 else:
                     s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
                     sguess_1 = s_delta
-                    sguess_2 = -sguess_1 + s_corr_np                   
+                    sguess_2 = -sguess_1 + s_corr_np                
             else:
                 sguess_1 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
                 sguess_2 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
@@ -304,28 +304,29 @@ class BatchAttackInstance:
             d = np.asarray( G.to_canonical(d) )
 
             #tshift1
-            is_adm = False
+            is_adm_left = False
             tmp1 = proj_submatrix_modulus(G,t1,dim=self.cd)
             tmp2 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd)
-            if all(np.isclose(tshift1 - tmp2+tmp1,0.0,atol=0.001)):
-                is_adm=True
+            if all(np.isclose(tshift1 - (tmp1-tmp2),0.0,atol=0.001)):
+                is_adm_left=True
 
-            #tshift1
+            #tshift2
+            is_adm_right = False
             tmp1 = proj_submatrix_modulus(G,t1,dim=self.cd)
             tmp2 = proj_submatrix_modulus(G,true_err,dim=self.cd)
             is_adm = False
-            if all(np.isclose(tshift2 - tmp1-tmp2,0.0,atol=0.001)):
-                is_adm_ &= True
+            if all(np.isclose(tshift2 - (tmp1+tmp2),0.0,atol=0.001)):
+                is_adm_right=True
             # assert all(np.isclose(proj_submatrix_modulus(G,lol2,dim=self.cd),0.0,atol=0.001)), f"Babai is wrong"
 
             eucl = (d @ d)**0.5
             infnrm = np.max(np.abs(d))
 
-            return eucl, infnrm, is_adm
+            return eucl, infnrm, (is_adm_left,is_adm_right)
 
         # For each (b,s,e) in bse, run n_trials of _trial_worker (parallelised)
-        is_adm_num = 0
-        is_adm_nums = []
+        is_adm_num = [0,0]
+        is_adm_nums = [[],[]]
         for b, s, e in self.bse[start:end]:
             mindd = float('inf')
             minddinf = float('inf')
@@ -337,7 +338,8 @@ class BatchAttackInstance:
                     if tries != 0 and tries % 1000 == 0:
                         print(f"{tries} out of {n_trials} done")
                     eucl, infnrm, is_adm = _trial_worker(tries, b, s_correct_guess,s,e)
-                    is_adm_num+=is_adm
+                    is_adm_num[0]+=is_adm[0]
+                    is_adm_num[1]+=is_adm[1]
                     if eucl < mindd:
                         mindd = eucl
                     if infnrm < minddinf:
@@ -356,7 +358,8 @@ class BatchAttackInstance:
                         except Exception as exc:
                             print(f"trial {tries} raised {exc!r}")
                             continue
-                        is_adm_num+=is_adm
+                        is_adm_num[0]+=is_adm[0]
+                        is_adm_num[1]+=is_adm[1]
                         if eucl < mindd:
                             mindd = eucl
                         if infnrm < minddinf:
@@ -364,7 +367,9 @@ class BatchAttackInstance:
 
             print(f"mindd, minddinf: {mindd, minddinf}")
             print(f"is_adm_num: {is_adm_num} | {n_trials}")
-            is_adm_nums.append(is_adm_num)
+            # is_adm_nums.append(is_adm_num)
+            is_adm_nums[0].append(is_adm_num[0])
+            is_adm_nums[1].append(is_adm_num[1])
             is_adm_num = 0
             mindds.append(mindd)
             minddinfs.append(minddinf)
@@ -464,9 +469,13 @@ def run_single_instance(idx: int,
 
     print(f"[inst {idx}] check_pairs_guess_MM(correct=True)")
     infdiff_correct, mindds_correct, is_adm_num_correct = lwe_instance.check_pairs_guess_MM(n_trials=n_trials, n_workers=inner_n_workers, correct=True)
-
+    is_adm_num_correct = is_adm_num_correct[0]
     print(f"[inst {idx}] check_pairs_guess_MM(correct=False)")
     infdiff_incorrect, mindds_incorrect, is_adm_num_incorrect = lwe_instance.check_pairs_guess_MM(correct=False, n_trials=n_trials, n_workers=inner_n_workers)
+    is_adm_num_incorrect = is_adm_num_incorrect[0]
+
+    print(f"correct adm: {is_adm_num_correct}")
+    print(f"incorrect adm: {is_adm_num_incorrect}")
 
     return {
         "idx": idx,
@@ -499,7 +508,7 @@ def main():
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
     n_tars = 20 ## per-lattice instances #20
-    n_trials = 300          # per-lattice-instance trials in check_pairs_guess_MM
+    n_trials = 50          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
     n, m, q = 130, 130, 3329
