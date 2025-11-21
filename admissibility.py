@@ -296,36 +296,43 @@ class BatchAttackInstance:
                 
             sec_proj2 = ( sguess_2 @ self.C )
             true_err = np.concatenate([e,-s[:-self.kappa]])
-            tshift2 = proj_submatrix_modulus(G,sec_proj2+true_err,dim=self.cd)
+            tshift2 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd) 
+            #NOTE: no true_err above since we cannot use it in the attack
+            #thus RHS [NP(sec_proj2+true_err)] of MitM equation is approximated with NP(sec_proj2)
+            #while LHS = RHS is replaced with LHS is close to RHS with admis. proba.
 
             d = tshift1 - tshift2  
             d = G.from_canonical( d )
             d = (self.H.nrows-self.cd)*[0] + list(d[-self.cd:])
             d = np.asarray( G.to_canonical(d) )
 
-            #tshift1
-            is_adm_left = False
-            tmp1 = proj_submatrix_modulus(G,t1,dim=self.cd)
-            tmp2 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd)
-            if all(np.isclose(tshift1 - (tmp1-tmp2),0.0,atol=0.001)):
-                is_adm_left=True
+            #tshift1 #we don't need to invoke admisibility here
+            # is_adm_left = False
+            # tmp1 = proj_submatrix_modulus(G,t1,dim=self.cd)
+            # tmp2 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd)
+            # tmp12 = tshift1 - (tmp1-tmp2)
+            # # tmp12 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd)
+            # if all(np.isclose(tmp12,0.0,atol=0.001)):
+            #     print(f"YESSSSS")
+            #     is_adm_left=True
 
             #tshift2
             is_adm_right = False
-            tmp1 = proj_submatrix_modulus(G,t1,dim=self.cd)
+            tshift2 = proj_submatrix_modulus(G,sec_proj2+true_err,dim=self.cd)
+            tmp1 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
             tmp2 = proj_submatrix_modulus(G,true_err,dim=self.cd)
+            tmp12 = tshift2 - (tmp1+tmp2)
             is_adm = False
-            if all(np.isclose(tshift2 - (tmp1+tmp2),0.0,atol=0.001)):
+            if all(np.isclose(tmp12,0.0,atol=0.001)):
                 is_adm_right=True
-            # assert all(np.isclose(proj_submatrix_modulus(G,lol2,dim=self.cd),0.0,atol=0.001)), f"Babai is wrong"
 
             eucl = (d @ d)**0.5
             infnrm = np.max(np.abs(d))
 
-            return eucl, infnrm, (is_adm_left,is_adm_right)
+            return eucl, infnrm, is_adm_right #(is_adm_left,is_adm_right)
 
         # For each (b,s,e) in bse, run n_trials of _trial_worker (parallelised)
-        is_adm_num = [0,0]
+        is_adm_num = 0
         is_adm_nums = [[],[]]
         for b, s, e in self.bse[start:end]:
             mindd = float('inf')
@@ -338,8 +345,7 @@ class BatchAttackInstance:
                     if tries != 0 and tries % 1000 == 0:
                         print(f"{tries} out of {n_trials} done")
                     eucl, infnrm, is_adm = _trial_worker(tries, b, s_correct_guess,s,e)
-                    is_adm_num[0]+=is_adm[0]
-                    is_adm_num[1]+=is_adm[1]
+                    is_adm_num+=is_adm
                     if eucl < mindd:
                         mindd = eucl
                     if infnrm < minddinf:
@@ -358,8 +364,7 @@ class BatchAttackInstance:
                         except Exception as exc:
                             print(f"trial {tries} raised {exc!r}")
                             continue
-                        is_adm_num[0]+=is_adm[0]
-                        is_adm_num[1]+=is_adm[1]
+                        is_adm_num+=is_adm
                         if eucl < mindd:
                             mindd = eucl
                         if infnrm < minddinf:
@@ -368,9 +373,8 @@ class BatchAttackInstance:
             print(f"mindd, minddinf: {mindd, minddinf}")
             print(f"is_adm_num: {is_adm_num} | {n_trials}")
             # is_adm_nums.append(is_adm_num)
-            is_adm_nums[0].append(is_adm_num[0])
-            is_adm_nums[1].append(is_adm_num[1])
-            is_adm_num = [0,0]
+            is_adm_nums.append(is_adm_num)
+            is_adm_num = 0
             mindds.append(mindd)
             minddinfs.append(minddinf)
         print(mindds)
@@ -389,7 +393,7 @@ def run_single_instance(idx: int,
                         n_trials: int,
                         ntar: int,
                         inner_n_workers: int,
-                        verify_min_gh=0.48) -> Dict[str, Any]:
+                        verify_min_gh=0.95) -> Dict[str, Any]:
     """
     One worker:
       - seeds RNG
@@ -508,15 +512,16 @@ def main():
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
     n_tars = 20 ## per-lattice instances #20
-    n_trials = 50          # per-lattice-instance trials in check_pairs_guess_MM
+    n_trials = 1500          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 130, 130, 3329
+    n, m, q = 128, 128, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 30
     cd = 50
     beta_max = 64
+    verify_min_gh = 0.95
 
     os.makedirs(in_path, exist_ok=True)
 
@@ -535,7 +540,8 @@ def main():
                 seed_base,
                 n_trials,
                 n_tars,
-                inner_n_workers
+                inner_n_workers,
+                verify_min_gh,
             ): idx
             for idx in range(n_lats)
         }
