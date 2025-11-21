@@ -21,7 +21,8 @@ try:
   from g6k.algorithms.bkz import pump_n_jump_bkz_tour
   from g6k.utils.stats import dummy_tracer
 except ImportError:
-  raise ImportError("g6k not installed")
+    pass
+#   raise ImportError("g6k not installed")
 
 def flatter_interface( fpylllB ):
     #import os

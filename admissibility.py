@@ -333,7 +333,7 @@ class BatchAttackInstance:
 
         # For each (b,s,e) in bse, run n_trials of _trial_worker (parallelised)
         is_adm_num = 0
-        is_adm_nums = [[],[]]
+        is_adm_nums = []
         for b, s, e in self.bse[start:end]:
             mindd = float('inf')
             minddinf = float('inf')
@@ -473,10 +473,8 @@ def run_single_instance(idx: int,
 
     print(f"[inst {idx}] check_pairs_guess_MM(correct=True)")
     infdiff_correct, mindds_correct, is_adm_num_correct = lwe_instance.check_pairs_guess_MM(n_trials=n_trials, n_workers=inner_n_workers, correct=True)
-    is_adm_num_correct = is_adm_num_correct[0]
     print(f"[inst {idx}] check_pairs_guess_MM(correct=False)")
     infdiff_incorrect, mindds_incorrect, is_adm_num_incorrect = lwe_instance.check_pairs_guess_MM(correct=False, n_trials=n_trials, n_workers=inner_n_workers)
-    is_adm_num_incorrect = is_adm_num_incorrect[0]
 
     print(f"correct adm: {is_adm_num_correct}")
     print(f"incorrect adm: {is_adm_num_incorrect}")
@@ -511,9 +509,9 @@ def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 20 ## per-lattice instances #20
-    n_trials = 1500          # per-lattice-instance trials in check_pairs_guess_MM
-    inner_n_workers = 5    # threads for inner parallelism
+    n_tars = 2 ## per-lattice instances #20
+    n_trials = 15          # per-lattice-instance trials in check_pairs_guess_MM
+    inner_n_workers = 2    # threads for inner parallelism
 
     n, m, q = 128, 128, 3329
     seed_base = 0
