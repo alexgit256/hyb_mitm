@@ -370,7 +370,7 @@ class BatchAttackInstance:
             # is_adm_nums.append(is_adm_num)
             is_adm_nums[0].append(is_adm_num[0])
             is_adm_nums[1].append(is_adm_num[1])
-            is_adm_num = 0
+            is_adm_num = [0,0]
             mindds.append(mindd)
             minddinfs.append(minddinf)
         print(mindds)
