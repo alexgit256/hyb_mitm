@@ -12,6 +12,8 @@ from itertools import chain
 import time
 from time import perf_counter
 
+from random import uniform
+
 from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_completed
 import numpy as np
 
@@ -38,16 +40,16 @@ def flatter_interface(fpylllB):
 
 def babai(G, t, mod_red=False):
     c = G.babai(t)
-    v = vector(G.B.multiply_left(c))
+    v = np.asarray(G.B.multiply_left(c))
     if mod_red:
-        return vector(t) - vector(v)
-    return vector(v)
+        return np.asarray(t) - np.asarray(v)
+    return np.asarray(v)
 
 # global parameters
 n = 60
 num_tests = 5000
 num_lats = 10
-max_outer_workers = 10   # processes
+max_outer_workers = 5   # processes
 max_inner_workers = 5   # threads *within* each process
 
 def process_single_lattice(lat_idx: int):
@@ -64,7 +66,7 @@ def process_single_lattice(lat_idx: int):
     B = IntegerMatrix(n, n)
     B.randomize("qary", k=n//2, bits=14.2)
 
-    G = GSO.Mat(B, float_type="ld")
+    G = GSO.Mat(B, float_type="double")
     G.update_gso()
 
     lll = LLL.Reduction(G)
@@ -83,7 +85,7 @@ def process_single_lattice(lat_idx: int):
         print(f"[lat {lat_idx}] BKZ-{beta} done in {perf_counter()-t0}")
     os.makedirs("lattices",exist_ok=True)
     
-    with open(f".lattices/lat{n}_{lat_idx}.pkl", "wb") as file:
+    with open(f"./lattices/lat{n}_{lat_idx}.pkl", "wb") as file:
         pickle.dump(LR.B, file)
 
     gh = gaussian_heuristic(G.r())**0.5   # if you prefer that
@@ -91,10 +93,11 @@ def process_single_lattice(lat_idx: int):
     # local worker for a single w (runs in threads within this *process*)
     def _worker(w):
         a = [uniform(-0.5, 0.5) for _ in range(n)]
-        a_noise = vector(G.to_canonical(a))
+        a_noise = np.asarray(G.to_canonical(a))
 
-        succ_inc = 1 if vector(G.babai(a_noise + w)).is_zero() else 0
-        succbab_inc = 1 if vector(G.babai(w)).is_zero() else 0
+        tmp = G.babai(a_noise + w)
+        succ_inc = 1 if all( np.isclose(tmp, 0.0, atol=1e-10) ) else 0
+        succbab_inc = 1 if all( np.isclose(G.babai(w), 0.0, atol=1e-10) ) else 0
         return succ_inc, succbab_inc
 
     gammas = np.linspace(0.3, 0.5, 9)
@@ -115,8 +118,8 @@ def process_single_lattice(lat_idx: int):
                 if it % 2000 == 0:
                     print(f"[lat {lat_idx}] it: {it} | {(succ, succbab)}", end=",")
 
-        succs[gamma] = RR(succ / num_tests)
-        succbabs[gamma] = RR(succbab / num_tests)
+        succs[gamma] = float(succ / num_tests)
+        succbabs[gamma] = float(succbab / num_tests)
 
     return lat_idx, succs, succbabs
 
