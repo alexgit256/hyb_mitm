@@ -509,16 +509,16 @@ def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 2 ## per-lattice instances #20
-    n_trials = 15          # per-lattice-instance trials in check_pairs_guess_MM
+    n_tars = 20 ## per-lattice instances #20
+    n_trials = 256          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 2    # threads for inner parallelism
 
-    n, m, q = 128, 128, 3329
+    n, m, q = 208, 208, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
-    kappa = 30
-    cd = 50
-    beta_max = 64
+    kappa = 52
+    cd = 60
+    beta_max = 70
     verify_min_gh = 0.95
 
     os.makedirs(in_path, exist_ok=True)
