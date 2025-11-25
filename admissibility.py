@@ -131,7 +131,7 @@ class BatchAttackInstance:
             C = D.get("C"),
         )
         
-    def check_correct_guess(self, start=0, end=None, n_trials=1):
+    def check_correct_guess(self, start=0, end=None):
         if end is None:
             end = len(self.bse)
         G = GSO.Mat( IntegerMatrix.from_matrix( self.H ), float_type="dd" )
@@ -445,14 +445,19 @@ def run_single_instance(idx: int,
             if verify_min_gh:
                 G = GSO.Mat( lwe_instance.H, float_type="dd" )
                 G.update_gso()
+
+                succ, iters = lwe_instance.check_correct_guess()
+                if succ/iters >= verify_min_gh:
+                    print(f"Stopped lattice reduction: {succ/iters} >= {verify_min_gh}")
+
                 # gh_sub = gaussian_heuristic( G.r()[-lwe_instance.cd:] )
-                gh_sub = np.min( G.r() )
-                tmp = verify_min_gh**2 * gh_sub * lwe_instance.cd/(2*log(lwe_instance.cd,2.71828))
-                if nrmper <= tmp:
-                    print(f"Stopped lattice reduction: {nrmper} <= {tmp}")
-                    break
-                else:
-                    print(f"Continuing lattice reduction: {nrmper} > {tmp}")
+                # gh_sub = np.min( G.r() )
+                # tmp = verify_min_gh**2 * gh_sub * lwe_instance.cd/(2*log(lwe_instance.cd,2.71828))
+                # if nrmper <= tmp:
+                #     print(f"Stopped lattice reduction: {nrmper} <= {tmp}")
+                #     break
+                # else:
+                #     print(f"Continuing lattice reduction: {nrmper} > {tmp}")
             
 
         # save reduced instance to disk so future runs can reuse it
@@ -509,16 +514,16 @@ def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 20 ## per-lattice instances #20
-    n_trials = 256          # per-lattice-instance trials in check_pairs_guess_MM
-    inner_n_workers = 2    # threads for inner parallelism
+    n_tars = 50 ## per-lattice instances #20
+    n_trials = 2000          # per-lattice-instance trials in check_pairs_guess_MM
+    inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 208, 208, 3329
+    n, m, q = 140, 140, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
-    kappa = 52
-    cd = 60
-    beta_max = 70
+    kappa = 30
+    cd = 32
+    beta_max = 47
     verify_min_gh = 0.95
 
     os.makedirs(in_path, exist_ok=True)

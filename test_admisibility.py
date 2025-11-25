@@ -46,7 +46,7 @@ def babai(G, t, mod_red=False):
     return np.asarray(v)
 
 # global parameters
-n = 60
+n = 32
 num_tests = 5000
 num_lats = 10
 max_outer_workers = 5   # processes
@@ -100,7 +100,7 @@ def process_single_lattice(lat_idx: int):
         succbab_inc = 1 if all( np.isclose(G.babai(w), 0.0, atol=1e-10) ) else 0
         return succ_inc, succbab_inc
 
-    gammas = np.linspace(0.3, 0.5, 9)
+    gammas = np.linspace(0.45, 0.75, 9)
     succs, succbabs = {}, {}
 
     for gamma in gammas:
