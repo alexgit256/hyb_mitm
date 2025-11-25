@@ -46,11 +46,13 @@ def babai(G, t, mod_red=False):
     return np.asarray(v)
 
 # global parameters
-n = 32
-num_tests = 5000
+n = 80
+num_tests = 250000
 num_lats = 10
 max_outer_workers = 5   # processes
 max_inner_workers = 5   # threads *within* each process
+
+gammas = np.linspace(0.3, 0.5, 9)
 
 def process_single_lattice(lat_idx: int):
     """
@@ -63,30 +65,36 @@ def process_single_lattice(lat_idx: int):
 
     # ---- lattice generation & BKZ ----
 
-    B = IntegerMatrix(n, n)
-    B.randomize("qary", k=n//2, bits=14.2)
+    if os.path.isfile( f"./lattices/lat{n}_{lat_idx}.pkl" ):
+        with open(f"./lattices/lat{n}_{lat_idx}.pkl","rb") as file:
+            B = pickle.load( file )
+        G = GSO.Mat(B, float_type="double")
+        G.update_gso()
+    else:
+        B = IntegerMatrix(n, n)
+        B.randomize("qary", k=n//2, bits=14.2)
 
-    G = GSO.Mat(B, float_type="double")
-    G.update_gso()
+        G = GSO.Mat(B, float_type="double")
+        G.update_gso()
 
-    lll = LLL.Reduction(G)
-    lll()
+        lll = LLL.Reduction(G)
+        lll()
 
-    LR = LatticeReduction(lll.M.B)
+        LR = LatticeReduction(lll.M.B)
 
-    for beta in list(range(40, n)):    # BKZ reduce the basis
-        t0 = perf_counter()
-        LR(beta=beta,
-           bkz_tours=2,
-           cores=max_inner_workers,
-           depth=4,
-           start=0,
-           end=None)
-        print(f"[lat {lat_idx}] BKZ-{beta} done in {perf_counter()-t0}")
-    os.makedirs("lattices",exist_ok=True)
-    
-    with open(f"./lattices/lat{n}_{lat_idx}.pkl", "wb") as file:
-        pickle.dump(LR.B, file)
+        for beta in list(range(40, n)):    # BKZ reduce the basis
+            t0 = perf_counter()
+            LR(beta=beta,
+            bkz_tours=2,
+            cores=max_inner_workers,
+            depth=4,
+            start=0,
+            end=None)
+            print(f"[lat {lat_idx}] BKZ-{beta} done in {perf_counter()-t0}")
+        os.makedirs("lattices",exist_ok=True)
+        
+        with open(f"./lattices/lat{n}_{lat_idx}.pkl", "wb") as file:
+            pickle.dump(LR.B, file)
 
     gh = gaussian_heuristic(G.r())**0.5   # if you prefer that
 
@@ -100,7 +108,6 @@ def process_single_lattice(lat_idx: int):
         succbab_inc = 1 if all( np.isclose(G.babai(w), 0.0, atol=1e-10) ) else 0
         return succ_inc, succbab_inc
 
-    gammas = np.linspace(0.45, 0.75, 9)
     succs, succbabs = {}, {}
 
     for gamma in gammas:
@@ -123,6 +130,70 @@ def process_single_lattice(lat_idx: int):
 
     return lat_idx, succs, succbabs
 
+def process_single_box(lat_idx: int):
+    if os.path.isfile( f"./lattices/lat{n}_{lat_idx}.pkl" ):
+        with open(f"./lattices/lat{n}_{lat_idx}.pkl","rb") as file:
+            B = pickle.load( file )
+        G = GSO.Mat(B, float_type="double")
+        G.update_gso()
+    else:
+        B = IntegerMatrix(n, n)
+        B.randomize("qary", k=n//2, bits=14.2)
+
+        G = GSO.Mat(B, float_type="double")
+        G.update_gso()
+
+        lll = LLL.Reduction(G)
+        lll()
+
+        LR = LatticeReduction(lll.M.B)
+
+        for beta in list(range(40, n)):    # BKZ reduce the basis
+            t0 = perf_counter()
+            LR(beta=beta,
+            bkz_tours=2,
+            cores=max_inner_workers,
+            depth=4,
+            start=0,
+            end=None)
+            print(f"[lat {lat_idx}] BKZ-{beta} done in {perf_counter()-t0}")
+        os.makedirs("lattices",exist_ok=True)
+        
+        with open(f"./lattices/lat{n}_{lat_idx}.pkl", "wb") as file:
+            pickle.dump(LR.B, file)
+
+    gh = gaussian_heuristic(G.r())**0.5
+    def _worker(w):
+        # local computation for a single w
+        a = np.array( [uniform(-0.5, 0.5) for _ in range(n)] )
+        ww = np.asarray( G.from_canonical( w ) )
+        
+        succ_inc = 1 if all( np.abs(a+ww) <= 0.500001 ) else 0
+        succbab_inc = 1 if all( np.abs(ww) <= 0.500001 ) else 0
+        return succ_inc, succbab_inc
+
+    succs, succbabs = {}, {} 
+    for gamma in gammas:
+        print(f"gamma: {gamma}")
+        W = uniform_in_ball(num_tests,n,radius=gamma*gh)
+        succ = 0
+        succbab = 0
+        
+        # tune max_workers to your CPU / GIL behavior
+        max_workers = 12  # None -> default = number of processors * 5
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            for it, (s_inc, sb_inc) in enumerate(ex.map(_worker, W), start=1):
+                succ += s_inc
+                succbab += sb_inc
+        
+                if it % 2000 == 0:
+                    print(f"it: {it} | {(succ, succbab)}", end=",")
+        
+        # succ and succbab now contain the final counts
+        
+        succs[gamma], succbabs[gamma] = float(succ / num_tests), float(succbab / num_tests)
+    return lat_idx, succs, succbabs
 
 if __name__ == "__main__":
     # outer parallel loop – processes
@@ -154,3 +225,34 @@ if __name__ == "__main__":
             {"succbabs":succbabs,
              "succs": succs}
             ,file)
+        
+    print(f"- - - Now the sim - - -")
+    results = {}
+    try:
+        with ProcessPoolExecutor(max_workers=max_outer_workers) as outer_pool:
+            futures = {
+                outer_pool.submit(process_single_box, lat_idx): lat_idx
+                for lat_idx in range(num_lats)
+            }
+
+            for fut in as_completed(futures):
+                lat_idx, succs, succbabs = fut.result()
+                results[lat_idx] = (succs, succbabs)
+                print(f"\n[lattice {lat_idx}] sim finished.")
+    except KeyboardInterrupt:
+        # optional: nicer Ctrl-C behaviour
+        print("\nInterrupted by user, shutting down workers.")
+        # `cancel_futures=True` is Python 3.9+
+        outer_pool.shutdown(wait=False, cancel_futures=True)
+        raise
+
+    # `results` now holds succs/succbabs dictionaries for each lattice index
+    # do whatever post-processing you want here
+
+    with open(f"exp_{n}_sim.pkl", "wb") as file:
+        pickle.dump(
+            {"succbabs":succbabs,
+             "succs": succs}
+            ,file)
+    print()
+    print(results)
