@@ -46,8 +46,8 @@ def babai(G, t, mod_red=False):
     return np.asarray(v)
 
 # global parameters
-n = 80
-num_tests = 250000
+n = 60
+num_tests = 40000
 num_lats = 10
 max_outer_workers = 5   # processes
 max_inner_workers = 5   # threads *within* each process
@@ -95,6 +95,10 @@ def process_single_lattice(lat_idx: int):
         
         with open(f"./lattices/lat{n}_{lat_idx}.pkl", "wb") as file:
             pickle.dump(LR.B, file)
+
+        B = LR.B
+        G = GSO.Mat(B, float_type="double")
+        G.update_gso()
 
     gh = gaussian_heuristic(G.r())**0.5   # if you prefer that
 
@@ -161,6 +165,10 @@ def process_single_box(lat_idx: int):
         
         with open(f"./lattices/lat{n}_{lat_idx}.pkl", "wb") as file:
             pickle.dump(LR.B, file)
+
+        B = LR.B
+        G = GSO.Mat(B, float_type="double")
+        G.update_gso()
 
     gh = gaussian_heuristic(G.r())**0.5
     def _worker(w):
