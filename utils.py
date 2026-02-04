@@ -290,9 +290,6 @@ def proj_submatrix_modulus_blas(R,T,dim=None):
     Tproj = T[d-dim:] #projection of arbitrary many columns of T onto the last dim coords
     Rproj = R[d-dim:,d-dim:] #R-factor of the last dim dimensional projective sublattice
     U = np.zeros( (dim,n),dtype=np.int64 )
-    print(f"T: {np.shape(T)}")
-    print(f"R: {np.shape(R)}")
-    print(f"U: {np.shape(U)}")
 
     nearest_plane(R,T,U)
 

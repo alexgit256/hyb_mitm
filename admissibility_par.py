@@ -26,6 +26,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import ArtistAnimation, PillowWriter
 
+import traceback
+
 # - - - BEG BLASTER SRed - - -
 
 from blaster_core import \
@@ -94,9 +96,18 @@ class BatchAttackInstance:
 
             H = B[:len(B)-self.kappa] #the part of basis to be reduced
             H = IntegerMatrix.from_matrix( [ h11[:len(B)-self.kappa] for h11 in H  ] )
-            C = [ b[:len(B)-self.kappa] for b in B[len(B)-self.kappa:] ] #the guessing matrix 
+            C = np.array( [ b[:len(B)-self.kappa] for b in B[len(B)-self.kappa:] ] ) #the guessing matrix 
         self.H, self.C = H, C
 
+        #QR enforces column matrices - so we transpose everything for BLASTER
+        Qinv, R, QinvCT = kwargs.get("Qinv"), kwargs.get("R"), kwargs.get("QinvCT")
+        if any( tmp is None for tmp in [Qinv, R, QinvCT] ):
+            Q, R = np.linalg.qr(np.array(list(H),dtype=np.float64).transpose(), mode='reduced')
+            Qinv =  np.linalg.inv( Q )
+            QinvCT = Qinv@np.array(C).astype(np.float64).transpose()
+            self.R = R
+            self.Qinv = Qinv
+            self.QinvCT = QinvCT
 
     def reduce(self,beta, bkz_tours, bkz_size=64, lll_size = 64, delta = 0.99, cores=1, debug= False,
         verbose= True, logfile= None, anim= None, depth = 4,
@@ -284,14 +295,19 @@ class BatchAttackInstance:
         def _trial_worker(trie_idx, batch_size, b, s_correct_guess,s,e):
             # create a local RNG to avoid shared-state race
             seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
-            rng = random.Random(seed)
+            # rng = random.Random(seed)
+            rng = np.random.default_rng(seed)
+
+            print(f"batch_size: {batch_size}")
+
+            # lat_dim = self.G.d
 
             # ensure numpy arrays for elementwise ops
             s_corr = np.asarray(s_correct_guess, dtype=np.int64)
             kappa = s_corr.size
 
             if correct:
-                msk_sublen = rng.randrange(self.kappa//2, self.kappa)
+                msk_sublen = rng.integers(self.kappa//2, self.kappa, size=batch_size)
 
                 # build masks: shape (kappa, B)
                 msk = np.zeros((kappa, batch_size), dtype=np.int8)
@@ -300,44 +316,134 @@ class BatchAttackInstance:
                     rng.shuffle(msk[:, j])
 
                 # broadcast s_corr[:,None]
-                sguess_1 = s_corr[:, None] * msk
-                sguess_2 = -sguess_1 + s_corr[:, None]             
+                sguess_1 = msk * s_corr[:, None] 
+                sguess_2 = -sguess_1 + s_corr[:, None]  
+                print(f"- - -  {np.shape(sguess_1)}", flush=True)
+                assert np.shape(sguess_1) == (kappa, batch_size), "Nonono"          
             else:
                 # uniform {-1,0,1}, shape (kappa,B)
                 sguess_1 = rng.integers(-1, 2, size=(kappa, batch_size))
                 sguess_2 = rng.integers(-1, 2, size=(kappa, batch_size))
-
-            # compute projections and shifts
+                assert np.shape(sguess_1) == (kappa, batch_size), "Nonono"  
+            print("- - - -", flush=True)
             # sec_proj1 = ( sguess_1 @ self.C )
             # t1 = np.concatenate( [b,(self.n-self.kappa)*[0]] )
             # tshift1 = proj_submatrix_modulus(G,t1-sec_proj1,dim=self.cd)
                 
-            sec_proj2 = ( sguess_2 @ self.C )
-            true_err = np.concatenate([e,-s[:-self.kappa]])
-            tshift2 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd) 
-            #NOTE: no true_err above since we cannot use it in the attack
-            #thus RHS [NP(sec_proj2+true_err)] of MitM equation is approximated with NP(sec_proj2)
-            #while LHS = RHS is replaced with LHS is close to RHS with admis. proba.
+            # sec_proj2 = ( sguess_2 @ self.C )
+            # true_err = np.concatenate([e,-s[:-self.kappa]])
+            # tshift2 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd) 
+            # #NOTE: no true_err above since we cannot use it in the attack
+            # #thus RHS [NP(sec_proj2+true_err)] of MitM equation is approximated with NP(sec_proj2)
+            # #while LHS = RHS is replaced with LHS is close to RHS with admis. proba.
 
-            d = tshift1 - tshift2  
-            d = G.from_canonical( d )
-            d = (self.H.nrows-self.cd)*[0] + list(d[-self.cd:])
-            d = np.asarray( G.to_canonical(d) )
+            Rpart1, Rpart2 = copy(self.R[-self.cd:,-self.cd:]), copy(self.R[-self.cd:,-self.cd:])
+            # compute projections and shifts
+            sec_proj1_cols = self.QinvCT@sguess_1
+            # print(f"sec_proj1_cols = self.QinvCT@sguess_1: {np.shape(sec_proj1_cols), np.shape(self.QinvCT), np.shape(sguess_1)}")
 
-            #tshift2
-            is_adm_right = False
-            tshift2 = proj_submatrix_modulus(G,sec_proj2+true_err,dim=self.cd)
-            tmp1 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
-            tmp2 = proj_submatrix_modulus(G,true_err,dim=self.cd)
-            tmp12 = tshift2 - (tmp1+tmp2)
-            is_adm = False
-            if all(np.isclose(tmp12,0.0,atol=0.001)):
-                is_adm_right=True
+            t1 = self.Qinv@np.concatenate( [b,(self.n-self.kappa)*[0]] ) #original target aligned b
+            tbatch1 = t1[:,None] - sec_proj1_cols
+            tbatch1 = tbatch1[-self.cd:]
+            tbatch1_copy = copy(tbatch1)
 
-            eucl = (d @ d)**0.5
-            infnrm = np.max(np.abs(d))
+            U1 = proj_submatrix_modulus_blas( Rpart1, tbatch1, dim=self.cd )
+            # print("AAA", flush=True)
+            tshiftbatch1 = tbatch1 #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
+            # print(f"tbatch1_copy, Rp, U1: {np.shape(tbatch1_copy), np.shape(Rpart1), np.shape(U1)}")
+            tmp = Rpart1@U1
+            tshiftbatch1 += tbatch1_copy + tmp
 
-            return eucl, infnrm, is_adm_right #(is_adm_left,is_adm_right)
+            sec_proj2_cols = self.QinvCT@sguess_2
+            sec_proj2_cols = sec_proj2_cols[-self.cd:]
+            tbatch2 = copy(sec_proj2_cols)
+            U2 = proj_submatrix_modulus_blas( Rpart2, tbatch2, dim=self.cd )
+            tshiftbatch2 = tbatch2 + self.R[-self.cd:,-self.cd:]@U2 #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
+            
+
+            dbatch = tshiftbatch1 - tshiftbatch2
+            eucl = [ (tmp@tmp)**0.5 for tmp in dbatch ]
+            infnrm = [ np.max(np.abs(tmp)) for tmp in dbatch ]
+
+            return eucl, infnrm, 0 #len(dbatch)*[False]
+
+            # d = tshift1 - tshift2  
+            # d = G.from_canonical( d )
+            # d = (self.H.nrows-self.cd)*[0] + list(d[-self.cd:])
+            # d = np.asarray( G.to_canonical(d) )
+
+            # #tshift2
+            # is_adm_right = False
+            # tshift2 = proj_submatrix_modulus(G,sec_proj2+true_err,dim=self.cd)
+            # tmp1 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
+            # tmp2 = proj_submatrix_modulus(G,true_err,dim=self.cd)
+            # tmp12 = tshift2 - (tmp1+tmp2)
+            # is_adm = False
+            # if all(np.isclose(tmp12,0.0,atol=0.001)):
+            #     is_adm_right=True
+
+            # eucl = (d @ d)**0.5
+            # infnrm = np.max(np.abs(d))
+
+            # return eucl, infnrm, is_adm_right #(is_adm_left,is_adm_right)
+
+        # - - - - - - - - - - - - - - - - - - - - - - - - - borderplate
+        # def _trial_worker(trie_idx, batch_size, b, s_correct_guess,s,e):
+        #     # create a local RNG to avoid shared-state race
+        #     seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
+        #     rng = random.Random(seed)
+
+        #     # ensure numpy arrays for elementwise ops
+        #     s_corr_np = np.asarray(s_correct_guess)
+
+        #     if correct:
+        #         if USE_MASK:
+        #             msk_sublen = rng.randrange(self.kappa//2, self.kappa)
+        #             msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
+        #             rng.shuffle(msk)
+        #             msk_np = np.asarray(msk)
+        #             sguess_1 = s_corr_np * msk_np
+        #             sguess_2 = -sguess_1 + s_corr_np
+        #         else:
+        #             s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
+        #             sguess_1 = s_delta
+        #             sguess_2 = -sguess_1 + s_corr_np                
+        #     else:
+        #         sguess_1 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
+        #         sguess_2 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
+
+        #     # compute projections and shifts
+        #     sec_proj1 = ( sguess_1 @ self.C )
+        #     t1 = np.concatenate( [b,(self.n-self.kappa)*[0]] )
+        #     tshift1 = proj_submatrix_modulus(G,t1-sec_proj1,dim=self.cd)
+                
+        #     sec_proj2 = ( sguess_2 @ self.C )
+        #     true_err = np.concatenate([e,-s[:-self.kappa]])
+        #     tshift2 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd) 
+        #     #NOTE: no true_err above since we cannot use it in the attack
+        #     #thus RHS [NP(sec_proj2+true_err)] of MitM equation is approximated with NP(sec_proj2)
+        #     #while LHS = RHS is replaced with LHS is close to RHS with admis. proba.
+
+        #     d = tshift1 - tshift2  
+        #     d = G.from_canonical( d )
+        #     d = (self.H.nrows-self.cd)*[0] + list(d[-self.cd:])
+        #     d = np.asarray( G.to_canonical(d) )
+
+        #     #tshift2
+        #     is_adm_right = False
+        #     tshift2 = proj_submatrix_modulus(G,sec_proj2+true_err,dim=self.cd)
+        #     tmp1 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
+        #     tmp2 = proj_submatrix_modulus(G,true_err,dim=self.cd)
+        #     tmp12 = tshift2 - (tmp1+tmp2)
+        #     is_adm = False
+        #     if all(np.isclose(tmp12,0.0,atol=0.001)):
+        #         is_adm_right=True
+
+        #     eucl = (d @ d)**0.5
+        #     infnrm = np.max(np.abs(d))
+
+        #     return eucl, infnrm, is_adm_right #(is_adm_left,is_adm_right)
+        # - - - - - - - - - - - - - - - - - - - - - - - - - 
 
         # For each (b,s,e) in bse, run n_trials of _trial_worker (parallelised)
         is_adm_num = 0
@@ -353,31 +459,36 @@ class BatchAttackInstance:
                 for tries in range(n_trials_normalized):
                     if tries != 0 and tries % 10 == 0:
                         print(f"{tries} out of {n_trials_normalized} done")
-                    eucl, infnrm, is_adm = _trial_worker(tries, n_trials_normalized, b, s_correct_guess,s,e)
+                    eucl, infnrm, is_adm = _trial_worker(tries, n_trials, b, s_correct_guess,s,e)
                     is_adm_num+=is_adm
-                    if eucl < mindd:
-                        mindd = eucl
-                    if infnrm < minddinf:
-                        minddinf = infnrm
+                    if np.min(eucl) < mindd:
+                        mindd = np.min(eucl)
+                    if np.min(infnrm) < minddinf:  #TODO: see if admissibility == minimizing the norm
+                        minddinf = np.min(infnrm)
             else:
                 # parallel execution using ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                    futures = { ex.submit(_trial_worker, tries, n_trials_normalized, b, s_correct_guess, s,e): tries for tries in range(n_trials_normalized) }
+                    futures = {
+                        ex.submit(_trial_worker, tries, n_trials, b, s_correct_guess, s, e): tries
+                        for tries in range(n_trials_normalized)
+                    }
 
                     for fut in as_completed(futures):
                         tries = futures[fut]
                         if tries != 0 and tries % 10 == 0:
                             print(f"{tries} out of {n_trials_normalized} done")
+
                         try:
-                            eucl, infnrm, is_adm= fut.result()
-                        except Exception as exc:
-                            print(f"trial raised {exc!r}")
+                            eucl, infnrm, is_adm = fut.result()
+                        except Exception:
+                            print(f"\n_trial_worker crashed for tries={tries}")
+                            traceback.print_exc()          # prints full traceback to stderr
+                            # or: tb = traceback.format_exc(); print(tb)
                             continue
-                        is_adm_num+=is_adm
-                        if eucl < mindd:
-                            mindd = eucl
-                        if infnrm < minddinf:
-                            minddinf = infnrm
+
+                        is_adm_num += is_adm
+                        mindd = min(mindd, float(np.min(eucl)))
+                        minddinf = min(minddinf, float(np.min(infnrm)))
 
             print(f"mindd, minddinf: {mindd, minddinf}")
             print(f"is_adm_num: {is_adm_num} | {n_trials}")
@@ -525,12 +636,12 @@ def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 50 ## per-lattice instances #20
-    n_trials = 2000          # per-lattice-instance trials in check_pairs_guess_MM
-    num_per_batch = 512
+    n_tars = 5 ## per-lattice instances #20
+    n_trials = 64          # per-lattice-instance trials in check_pairs_guess_MM
+    num_per_batch = 16
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 100, 100, 3329
+    n, m, q = 90, 90, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 16
