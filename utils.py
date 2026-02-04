@@ -271,17 +271,15 @@ Complexity: O(N n^{omega-1}) if R is a `n x n` matrix, T is a `n x N` matrix, an
 :return: Nothing! The result is in T and U.
 """
 
-def proj_submatrix_modulus_blas(Q,R,T,dim=None):
+def proj_submatrix_modulus_blas(R,T,dim=None):
     """
 
     Given Q, R, T, U where R is the R-factor, finds the coordinates of the corresponding babai-close lattice vectors.
-    :param Q: rotation of a lattice.
     :param R: upper-triangular basis of a lattice.
     :param T: matrix containing many targets requiring reduction.
     :param U: the output transformation used to reduce T wrt R.
     """
     m, n = np.shape(T) #m - num basis vects, 
-    Ttr = np.linalg.inv( Q )@T #rotate targets to align with the R-factor
 
     d = np.shape(R)[1]
     if dim is None:
