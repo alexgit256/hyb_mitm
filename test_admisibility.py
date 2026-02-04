@@ -22,7 +22,6 @@ import pickle
 
 from utils import uniform_in_ball
 
-# your helper functions stay the same
 def flatter_interface(fpylllB):
     basis = '[' + fpylllB.__str__() + ']'
     seed = randrange(2**32)
@@ -46,8 +45,8 @@ def babai(G, t, mod_red=False):
     return np.asarray(v)
 
 # global parameters
-n = 60
-num_tests = 40000
+n = 61
+num_tests = 5000
 num_lats = 10
 max_outer_workers = 5   # processes
 max_inner_workers = 5   # threads *within* each process

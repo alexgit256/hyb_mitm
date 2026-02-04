@@ -268,8 +268,6 @@ class BatchAttackInstance:
             seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
             rng = random.Random(seed)
 
-            
-
             # ensure numpy arrays for elementwise ops
             s_corr_np = np.asarray(s_correct_guess)
 
@@ -305,16 +303,6 @@ class BatchAttackInstance:
             d = G.from_canonical( d )
             d = (self.H.nrows-self.cd)*[0] + list(d[-self.cd:])
             d = np.asarray( G.to_canonical(d) )
-
-            #tshift1 #we don't need to invoke admisibility here
-            # is_adm_left = False
-            # tmp1 = proj_submatrix_modulus(G,t1,dim=self.cd)
-            # tmp2 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd)
-            # tmp12 = tshift1 - (tmp1-tmp2)
-            # # tmp12 = proj_submatrix_modulus(G,sec_proj1,dim=self.cd)
-            # if all(np.isclose(tmp12,0.0,atol=0.001)):
-            #     print(f"YESSSSS")
-            #     is_adm_left=True
 
             #tshift2
             is_adm_right = False
@@ -438,7 +426,7 @@ def run_single_instance(idx: int,
         for beta in list(range(40, beta_max+1, 1)):
             t0 = perf_counter()
             lwe_instance.reduce(beta=beta, bkz_tours=2, 
-                                cores=6, depth=4,
+                                cores=inner_n_workers, #, depth=4,
                                 start=0, end=None)
             print(f"[inst {idx}] bkz-{beta} done in {perf_counter()-t0:.2f}s")
 
@@ -448,7 +436,8 @@ def run_single_instance(idx: int,
 
                 succ, iters = lwe_instance.check_correct_guess()
                 if succ/iters >= verify_min_gh:
-                    print(f"Stopped lattice reduction: {succ/iters} >= {verify_min_gh}")
+                    print(f"Stopped lattice reduction at {beta}: {succ/iters} >= {verify_min_gh}")
+                    break
 
                 # gh_sub = gaussian_heuristic( G.r()[-lwe_instance.cd:] )
                 # gh_sub = np.min( G.r() )
@@ -477,9 +466,9 @@ def run_single_instance(idx: int,
     print(f"[inst {idx}] check_correct_guess_w_babai -> ({succnum}, {itnum})")
 
     print(f"[inst {idx}] check_pairs_guess_MM(correct=True)")
-    infdiff_correct, mindds_correct, is_adm_num_correct = lwe_instance.check_pairs_guess_MM(n_trials=n_trials, n_workers=inner_n_workers, correct=True)
+    infdiff_correct, mindds_correct, is_adm_num_correct       = lwe_instance.check_pairs_guess_MM(n_trials=n_trials, n_workers=inner_n_workers, correct=True)
     print(f"[inst {idx}] check_pairs_guess_MM(correct=False)")
-    infdiff_incorrect, mindds_incorrect, is_adm_num_incorrect = lwe_instance.check_pairs_guess_MM(correct=False, n_trials=n_trials, n_workers=inner_n_workers)
+    infdiff_incorrect, mindds_incorrect, is_adm_num_incorrect = lwe_instance.check_pairs_guess_MM(n_trials=n_trials, n_workers=inner_n_workers, correct=False)
 
     print(f"correct adm: {is_adm_num_correct}")
     print(f"incorrect adm: {is_adm_num_incorrect}")
@@ -518,13 +507,13 @@ def main():
     n_trials = 2000          # per-lattice-instance trials in check_pairs_guess_MM
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 140, 140, 3329
+    n, m, q = 100, 100, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
-    kappa = 30
+    kappa = 16
     cd = 32
-    beta_max = 47
-    verify_min_gh = 0.95
+    beta_max = 55
+    verify_min_gh = 1.0
 
     os.makedirs(in_path, exist_ok=True)
 

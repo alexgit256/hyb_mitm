@@ -7,6 +7,10 @@ FPLLL.set_random_seed(0x1337)
 from math import sqrt, ceil, floor, log, exp
 from copy import deepcopy
 
+from blaster_core import \
+    set_debug_flag, set_num_cores, block_lll, block_deep_lll, block_bkz, ZZ_right_matmul
+from size_reduction import nearest_plane
+
 # try:
 #     from multiprocess import Pool  # you might need pip install multiprocess
 # except ModuleNotFoundError:
@@ -251,3 +255,48 @@ def find_vect_in_list(v,l,tolerance=1.0e-6):
             return i
     print(f"FAIL mindiff: {mindiff}")
     return None
+
+# def nearest_plane(R, T, U):
+"""
+Perform Babai's Nearest Plane algorithm on multiple targets (all the columns of T), with
+respect to the upper-triangular basis R.
+This function updates T <- T + RU such that `T + RU` is in the fundamental Babai domain.
+Namely, |(T + RU)_{ij}| <= 0.5 R_ii.
+
+Complexity: O(N n^{omega-1}) if R is a `n x n` matrix, T is a `n x N` matrix, and `N >= n`.
+
+:param R: upper-triangular basis of a lattice.
+:param T: matrix containing many targets requiring reduction.
+:param U: the output transformation used to reduce T wrt R.
+:return: Nothing! The result is in T and U.
+"""
+
+def proj_submatrix_modulus_blas(Q,R,T,dim=None):
+    """
+
+    Given Q, R, T, U where R is the R-factor, finds the coordinates of the corresponding babai-close lattice vectors.
+    :param Q: rotation of a lattice.
+    :param R: upper-triangular basis of a lattice.
+    :param T: matrix containing many targets requiring reduction.
+    :param U: the output transformation used to reduce T wrt R.
+    """
+    m, n = np.shape(T) #m - num basis vects, 
+    Ttr = np.linalg.inv( Q )@T #rotate targets to align with the R-factor
+
+    d = np.shape(R)[1]
+    if dim is None:
+        dim = d
+    elif not (1 <= dim <= d):
+        raise ValueError("dim must be in [1, G.B.nrows]")
+
+    Tproj = T[d-dim:] #projection of arbitrary many columns of T onto the last dim coords
+    Rproj = R[d-dim:,d-dim:] #R-factor of the last dim dimensional projective sublattice
+    U = np.zeros( (dim,n),dtype=np.int64 )
+    print(f"T: {np.shape(T)}")
+    print(f"R: {np.shape(R)}")
+    print(f"U: {np.shape(U)}")
+
+    nearest_plane(R,T,U)
+
+    return U
+    
