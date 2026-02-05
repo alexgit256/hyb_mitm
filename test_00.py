@@ -74,27 +74,27 @@ def read_lattice(input_file=None):
 def batch_babai(R,T,U):
     return nearest_plane( R,T,U )
 
-n = 512
+n = 144
 
-# A = IntegerMatrix(n,n)
-# A.randomize("qary", k=n//2, bits=14.2)
+A = IntegerMatrix(n,n)
+A.randomize("qary", k=n//2, bits=14.2)
 
-# t0 = perf_counter()
-# LR = LatticeReduction( A )
-# print(f"flatter done in: {perf_counter()-t0}")
+t0 = perf_counter()
+LR = LatticeReduction( A )
+print(f"flatter done in: {perf_counter()-t0}")
 
-# for beta in [14,40,24,30]:
-#     t0 = perf_counter()
-#     LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
-#     print(f"BKZ-{beta} done in: {perf_counter()-t0}")
-# for beta in range(40,43):
-#     t0 = perf_counter()
-#     LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
-#     print(f"BKZ-{beta} done in: {perf_counter()-t0}")
+for beta in [14,40,24,30,66]:
+    t0 = perf_counter()
+    LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
+    print(f"BKZ-{beta} done in: {perf_counter()-t0}")
+for beta in range(40,43):
+    t0 = perf_counter()
+    LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
+    print(f"BKZ-{beta} done in: {perf_counter()-t0}")
 
-# A = np.array( list(line for line in LR.B) ).transpose()
-# print(A)
-# write_lattice( A, output_file=f"lattst_{n}.txt" )
+A = np.array( list(line for line in LR.B) ).transpose()
+print(A)
+write_lattice( A, output_file=f"lattst_{n}.txt" )
 
 A = read_lattice( f"lattst_{n}.txt" )
 

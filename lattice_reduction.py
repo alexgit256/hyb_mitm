@@ -5,7 +5,11 @@ from fpylll.algorithms.bkz2 import BKZReduction
 from math import sqrt, ceil, floor, log, exp
 
 import time, os
+import tempfile
+import subprocess
 from random import randrange
+
+from precision_wrapper import make_gso_mat
 
 from blaster import reduce
 # def bkz_reduce(B, U, U_seysen, lll_size, delta, depth,
@@ -26,23 +30,68 @@ except ImportError:
     pass
 #   raise ImportError("g6k not installed")
 
-def flatter_interface( fpylllB ):
-    #import os
-    basis = '[' + fpylllB.__str__() + ']'
-    #print(basis)
-    seed = randrange(2**32)
-    filename = f"lat{seed}.txt"
-    filename_out = f"redlat{seed}.txt"
-    with open(filename, 'w') as file:
-        file.write( "["+fpylllB.__str__()+"]" )
+def flatter_interface(fpylllB, *, flatter_bin="flatter", tmpdir=None, keep_files=False):
+    """
+    Run systemwide 'flatter' on an fpylll IntegerMatrix (or compatible),
+    using safe temporary files (not in cwd) and avoiding name collisions.
+
+    Args:
+        fpylllB: fpylll IntegerMatrix (basis).
+        flatter_bin: path to flatter executable (default "flatter").
+        tmpdir: directory for temporary files (default: OS temp dir).
+        keep_files: keep temp files for debugging.
+
+    Returns:
+        Reduced IntegerMatrix.
+    """
+    # Create a unique temporary directory (atomic + collision-resistant).
+    # Files live there, not in the working directory.
+    with tempfile.TemporaryDirectory(prefix="flatter_", dir=tmpdir) as d:
+        in_path = os.path.join(d, "lat.txt")
+        out_path = os.path.join(d, "redlat.txt")
+
+        # Write input basis in the format you used before.
+        # (Keep it exactly to avoid breaking flatter parsing.)
+        with open(in_path, "w", encoding="utf-8") as f:
+            f.write("[" + str(fpylllB) + "]")
+
+        # Run flatter: read from file, capture stdout into out_path
+        # No shell, no redirection, no injection risk.
+        with open(out_path, "w", encoding="utf-8") as fout:
+            subprocess.run(
+                [flatter_bin, in_path],
+                stdout=fout,
+                stderr=subprocess.PIPE,   # or redirect to a log file if you prefer
+                check=True,
+                text=True,
+            )
+
+        B = IntegerMatrix.from_file(out_path)
+
+        if keep_files:
+            # If you want to keep them, move them out before the temp dir is deleted.
+            # Easiest: copy elsewhere or raise the directory path to caller.
+            raise RuntimeError(f"keep_files=True: temp files are in {d}")
+
+        return B
+
+# def flatter_interface( fpylllB ):
+#     #import os
+#     basis = '[' + fpylllB.__str__() + ']'
+#     #print(basis)
+#     seed = randrange(2**32)
+#     filename = f"lat{seed}.txt"
+#     filename_out = f"redlat{seed}.txt"
+#     with open(filename, 'w') as file:
+#         file.write( "["+fpylllB.__str__()+"]" )
     
-    out = os.system( "flatter " + filename + " > " + filename_out )
-    time.sleep(float(0.05))
-    os.remove( filename )
+#     out = os.system( "flatter " + filename + " > " + filename_out )
+#     time.sleep(float(0.05))
+#     os.remove( filename )
     
-    B = IntegerMatrix.from_file( filename_out )
-    os.remove( filename_out )
-    return B
+#     B = IntegerMatrix.from_file( filename_out )
+#     os.remove( filename_out )
+#     return B
 
 class LatticeReduction:
     def __init__(self,B):
@@ -51,7 +100,7 @@ class LatticeReduction:
 
     def __call__(self, lll_size  = 64, delta: float = 0.99, start=0, end=None, cores=1, debug  = False,
         verbose  = False, logfile  = None, anim  = None, depth  = 0,
-        use_seysen  = False, beta=2, bkz_tours=1, **kwds):
+        use_seysen  = False, beta=2, bkz_tours=1, use_blaster=True, **kwds):
         """
         Reduces self.B.
         lll_size: sub-LLL blocksize.
@@ -63,14 +112,14 @@ class LatticeReduction:
         """
         if end is None or end==-1:
             end = self.B.nrows
-
-        use_blaster=True
+      
         B_trunc = IntegerMatrix.from_matrix( [self.B[i] for i in range(start,end)] )
         if beta<40:
             ft = "mpfr" if self.B.nrows > 400 else ("double" if self.B.nrows < 140 else "dd")
-            G = GSO.Mat(B_trunc, float_type=ft,
-            U=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type),
-            UinvT=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type))
+            # G = GSO.Mat(B_trunc, float_type=ft,
+            # U=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type),
+            # UinvT=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type))
+            G = make_gso_mat( B_trunc )
             G.update_gso()
             lll = LLL.Reduction(G)
             lll()
@@ -90,9 +139,10 @@ class LatticeReduction:
             verbose=verbose, logfile=logfile, anim=None, depth=depth,
             use_seysen=use_seysen, bkz_tours=bkz_tours, beta=beta)[1].transpose()
         else:
-            G = GSO.Mat(B_trunc, float_type="double", 
-            U=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type),
-            UinvT=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type))
+            # G = GSO.Mat(B_trunc, float_type="double", 
+            # U=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type),
+            # UinvT=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type))
+            G = make_gso_mat( B_trunc )
             G.update_gso()
             
             params_sieve = SieverParams()
