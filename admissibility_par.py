@@ -340,7 +340,6 @@ class BatchAttackInstance:
             Rpart1, Rpart2 = copy(self.R[-self.cd:,-self.cd:]), copy(self.R[-self.cd:,-self.cd:])
             # compute projections and shifts
             sec_proj1_cols = self.QinvCT@sguess_1
-            # print(f"sec_proj1_cols = self.QinvCT@sguess_1: {np.shape(sec_proj1_cols), np.shape(self.QinvCT), np.shape(sguess_1)}")
 
             t1 = self.Qinv@np.concatenate( [b,(self.n-self.kappa)*[0]] ) #original target aligned b
             tbatch1 = t1[:,None] - sec_proj1_cols
@@ -348,9 +347,7 @@ class BatchAttackInstance:
             tbatch1_copy = copy(tbatch1)
 
             U1 = proj_submatrix_modulus_blas( Rpart1, tbatch1, dim=self.cd )
-            # print("AAA", flush=True)
             tshiftbatch1 = tbatch1 #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
-            # print(f"tbatch1_copy, Rp, U1: {np.shape(tbatch1_copy), np.shape(Rpart1), np.shape(U1)}")
             tmp = Rpart1@U1
             tshiftbatch1 += tbatch1_copy + tmp
 
@@ -365,7 +362,31 @@ class BatchAttackInstance:
             eucl = [ (tmp@tmp)**0.5 for tmp in dbatch ]
             infnrm = [ np.max(np.abs(tmp)) for tmp in dbatch ]
 
-            return eucl, infnrm, 0 #len(dbatch)*[False]
+            # - - - seems to work up untill here - - -
+
+            true_err = np.concatenate([e,-s[:-self.kappa]])[-self.cd:]
+            # true_err = np.atleast_2d(true_err).T
+            tmp0batch = sec_proj2_cols + true_err[:,None]
+            W = proj_submatrix_modulus_blas( Rpart2, tmp0batch, dim=self.cd )
+            tmp0batch = tmp0batch + Rpart2@W
+
+            tmp1batch = sec_proj2_cols
+            W = proj_submatrix_modulus_blas( Rpart2, tmp1batch, dim=self.cd )
+            tmp1batch = tmp1batch + Rpart2@W
+
+            true_err = np.atleast_2d(true_err).T.astype(np.float64)
+            W = proj_submatrix_modulus_blas( Rpart2, true_err, dim=self.cd ) #np.array([true_err]) ?
+            tmp2 = true_err + Rpart2@W
+            # print(f"tmp2: {tmp2}")
+            # assert all(np.abs(tmp2) < 0.501), "Nonononono"
+
+            is_adm = []
+            tmp12 = tmp0batch - (tmp1batch+tmp2)
+            for col in tmp12.T:
+                okay = all(np.isclose(col,0.0,atol=0.001))
+                is_adm.append(okay)
+
+            return eucl, infnrm, sum(is_adm) #len(dbatch)*[False]
 
             # d = tshift1 - tshift2  
             # d = G.from_canonical( d )
@@ -636,12 +657,12 @@ def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 5 ## per-lattice instances #20
-    n_trials = 64          # per-lattice-instance trials in check_pairs_guess_MM
-    num_per_batch = 16
+    n_tars = 20 ## per-lattice instances #20
+    n_trials = 2048          # per-lattice-instance trials in check_pairs_guess_MM
+    num_per_batch = 1024
     inner_n_workers = 5    # threads for inner parallelism
 
-    n, m, q = 90, 90, 3329
+    n, m, q = 120, 120, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 16
