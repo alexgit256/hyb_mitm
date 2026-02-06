@@ -58,42 +58,49 @@ def get_current_datetime():
     except Exception as e:
         return f"Error getting date and time: {e}"
 
-def add_pm1_noise(rng, sguess, kappa, batch_size, m_low=None, m_high=None, dtype=np.int8):
+# def add_pm1_noise(rng, sguess, kappa, batch_size, m_low=None, m_high=None, width=1, dtype=np.int8):
+def add_signed_uniform_noise(rng, sguess, kappa, batch_size, w=2, m_low=None, m_high=None, dtype=None):
     """
-    Add per-column sparse ±1 noise to sguess.
-    For each column j, choose m[j] distinct positions and add ±1 there.
+    Add per-column sparse noise where each nonzero entry is uniform in
+    {-w,...,-1, 1,...,w} (no zero).
 
-    - m[j] sampled uniformly in [m_low, m_high) if provided.
+    For each column j, choose m[j] distinct positions and add that noise there.
     """
+    w = int(w)
+    if w <= 0:
+        raise ValueError("w must be >= 1")
+
     if m_low is None:  m_low  = kappa // 2
     if m_high is None: m_high = kappa
-
     m = rng.integers(m_low, m_high, size=batch_size)  # per-column sparsity
-
-    # Random scores to choose positions (no per-column shuffle needed)
-    R = rng.random((kappa, batch_size), dtype=np.float32)
-
-    # For each column j, pick indices of top m[j] entries
-    # We do it by picking top m_max then masking extra.
     mmax = int(m.max())
+
+    # Choose positions without per-column shuffles:
+    R = rng.random((kappa, batch_size), dtype=np.float32)
     idx = np.argpartition(R, kth=kappa - mmax, axis=0)[kappa - mmax:, :]  # (mmax, batch)
 
-    # Random ±1 signs for the selected entries
-    signs = rng.integers(0, 2, size=(mmax, batch_size), dtype=np.int8) * 2 - 1  # ±1
+    # Values: magnitude in 1..w, sign in ±1
+    mag = rng.integers(1, w + 1, size=(mmax, batch_size), dtype=np.int16)  # 1..w
+    sgn = (rng.integers(0, 2, size=(mmax, batch_size), dtype=np.int16) * 2 - 1)  # ±1
+    vals = mag * sgn  # uniform over ±1..±w
 
-    # Build noise mask
-    noise = np.zeros((kappa, batch_size), dtype=dtype)
-
-    # Mask out the “extra” picks for columns where m[j] < mmax
+    # Scatter only the first m[j] entries in each column
     rows = np.arange(mmax)[:, None]
-    keep = rows < m[None, :]                       # (mmax, batch) boolean
-    idx_kept = idx[keep]                           # 1D
+    keep = rows < m[None, :]  # (mmax, batch)
+
+    idx_kept = idx[keep]  # 1D
     col_kept = np.broadcast_to(np.arange(batch_size), (mmax, batch_size))[keep]
-    sign_kept = signs[keep]
+    val_kept = vals[keep]
 
-    noise[idx_kept, col_kept] = sign_kept
+    # Pick dtype that won't overflow when added to sguess
+    if dtype is None:
+        # conservative: int16 unless sguess is already wider
+        dtype = np.int16 if sguess.dtype.itemsize <= 2 else sguess.dtype
 
-    return sguess + noise #, noise, m
+    noise = np.zeros((kappa, batch_size), dtype=dtype)
+    noise[idx_kept, col_kept] = val_kept.astype(dtype, copy=False)
+
+    return sguess + noise
 
 class BatchAttackInstance:
     def __init__(self, **kwargs):
@@ -118,6 +125,7 @@ class BatchAttackInstance:
 
         assert self.m+self.n-(self.kappa+self.cd) >=0, f"Too large attack dimensions!"
 
+        #extract relevant sublattices
         H, C = kwargs.get("H"), kwargs.get("C")
         if H is None or C is None:
             n = self.n
@@ -197,6 +205,7 @@ class BatchAttackInstance:
             C = D.get("C"),
         )
         
+    #checks if, after guessing self.kappa coordinates, babai solves instances [start:end]
     def check_correct_guess(self, start=0, end=None):
         if end is None:
             end = len(self.bse)
@@ -223,9 +232,11 @@ class BatchAttackInstance:
                 
     def check_pairs_guess_MM(self, start=0, end=None, correct=True, n_trials=10, n_workers=1, num_per_batch=512):
         """
-        Constructs correct (if correct==True) guesses s=s1-s2 for the MitM attack on LWE and checks if Babai(t+s2) == Babai(s1)
+        Constructs correct (if correct==True) guesses s=s1-s2 for the MitM attack on LWE and checks if Babai_{H}(t+g2) == Babai(g1),
+        where gi = si * C^{-1} (row notation)
         n_trials: number of decompositions of s.
         n_workers: number of parallel checks (threads).
+        num_per_batch: batch size for babai
         Returns:
             minddinfs : list of per-(b,s,e) minimal infinity norms found across trials
         """
@@ -259,45 +270,32 @@ class BatchAttackInstance:
             # broadcast s_corr[:,None]
             sguess_1 = msk * s_corr[:, None] 
             sguess_2 = -sguess_1 + s_corr[:, None]    
-            if not correct:
-                sguess_1 = add_pm1_noise(rng, sguess_1, kappa, batch_size, m_low=1, m_high=4)
-                sguess_2 = add_pm1_noise(rng, sguess_2, kappa, batch_size, m_low=1, m_high=4)
-                # msk_sublen0 = rng.integers(self.kappa//2, self.kappa, size=batch_size)
-                # msk_sublen1 = rng.integers(self.kappa//2, self.kappa, size=batch_size)
-
-                # msk0 = np.zeros((kappa, batch_size), dtype=np.int8)
-                # msk1 = np.zeros((kappa, batch_size), dtype=np.int8)
-                # for j in range(batch_size):
-                #     msk0[msk_sublen0[j], j] = 1 # I need +/- 1 here, randrange in the loop is too small
-                #     msk1[msk_sublen1[j], j] = 1
-                #     rng.shuffle(msk0[:, j])
-                #     rng.shuffle(msk1[:, j])
-                    
-                # sguess_1 = msk0 + sguess_1   #forcing "slight" misguessing
-                # sguess_2 = msk1 + sguess_2
+            if not correct: #simulate a "slight" misguess 
+                sguess_1 = add_signed_uniform_noise(rng, sguess_1, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
+                sguess_2 = add_signed_uniform_noise(rng, sguess_2, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
 
             Rpart1, Rpart2 = copy(self.R[-self.cd:,-self.cd:]), copy(self.R[-self.cd:,-self.cd:])
             # compute projections and shifts
-            sec_proj1_cols = self.QinvCT@sguess_1
+            sec_proj1_cols = self.QinvCT@sguess_1  #note: sguess_1 is a guess, so we can use it here
 
-            t1 = self.Qinv@np.concatenate( [b,(self.n-self.kappa)*[0]] ) #original target aligned b
-            tbatch1 = t1[:,None] - sec_proj1_cols
-            tbatch1 = tbatch1[-self.cd:]
-            tbatch1_copy = copy(tbatch1)
+            t1 = self.Qinv@np.concatenate( [b,(self.n-self.kappa)*[0]] ) #original target alligned wrt GS vectors
+            tbatch1 = t1[:,None] - sec_proj1_cols   #t1 = target - guess_1
+            tbatch1 = tbatch1[-self.cd:]    #project target to the last self.cd dim. proj sublat
+            tbatch1_copy = copy(tbatch1) #next line modifies tbatch1, so we need a copy
 
-            U1 = proj_submatrix_modulus_blas( Rpart1, tbatch1, dim=self.cd )
-            tshiftbatch1 = tbatch1 #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
+            U1 = proj_submatrix_modulus_blas( Rpart1, tbatch1, dim=self.cd ) #find a proj lattice vector close to -t1
+            tshiftbatch1 = tbatch1 
             tmp = Rpart1@U1
-            tshiftbatch1 += tbatch1_copy + tmp
+            tshiftbatch1 += tbatch1_copy + tmp #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
 
-            sec_proj2_cols = self.QinvCT@sguess_2
+            sec_proj2_cols = self.QinvCT@sguess_2 #t2
             sec_proj2_cols = sec_proj2_cols[-self.cd:]
             tbatch2 = copy(sec_proj2_cols)
             U2 = proj_submatrix_modulus_blas( Rpart2, tbatch2, dim=self.cd )
             tshiftbatch2 = tbatch2 + self.R[-self.cd:,-self.cd:]@U2 #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
             
 
-            dbatch = tshiftbatch1 - tshiftbatch2
+            dbatch = tshiftbatch1 - tshiftbatch2 #delta betveen babai(t1) and babai(t2)
             eucl = [ (tmp@tmp)**0.5 for tmp in dbatch.T ]
             infnrm = [ np.max(np.abs(tmp)) for tmp in dbatch.T ]
 
@@ -449,7 +447,7 @@ class BatchAttackInstance:
                         minddinf = min(minddinf, float(np.min(infnrm)))
             target_num += 1
             print(f"mindd, minddinf: {mindd, minddinf}")
-            print(f"is_adm_num: {is_adm_num} | {n_trials}")
+            print(f"is_adm_num: {is_adm_num} | {n_trials_normalized*num_per_batch}")
             print(f"{target_num} out of {end-start} targets done")
             # is_adm_nums.append(is_adm_num)
             is_adm_nums.append(is_adm_num)
@@ -493,6 +491,7 @@ def run_single_instance(idx: int,
     # load or create instance
     try:
         lwe_instance = BatchAttackInstance.load_from_disc(fullpath)
+        lwe_instance.cd = cd #technically, this should not be a field?
         loaded = True
         print(f"[inst {idx}] loaded from {fullpath}")
     except FileNotFoundError:
@@ -595,13 +594,13 @@ def main():
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
     n_tars = 100 ## per-lattice instances #20
-    n_trials = 8192*4          # per-lattice-instance trials in check_pairs_guess_MM
+    n_trials = 8192*4          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
     num_per_batch = 8192
     inner_n_workers = 8    # threads for inner parallelism
 
-    n, m, q = 144, 144, 3329
+    n, m, q = 128, 128, 3329
     seed_base = 0
-    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 80, "binomial", 2
+    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
     kappa = 16
     cd = 50
     beta_max = 62
