@@ -522,10 +522,10 @@ def main():
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 90, 90, 3329
+    n, m, q = 256, 256, 3329
     seed_base = 0
-    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
-    kappa = 20
+    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
+    kappa = 156
     cd = 50
     beta_max = 50
     verify_min_gh = 1.0
