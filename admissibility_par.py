@@ -211,7 +211,6 @@ class BatchAttackInstance:
             end = len(self.bse)
         G = GSO.Mat( IntegerMatrix.from_matrix( self.H ), float_type="mpfr" )
         G.update_gso()
-        # G = self.G
         succnum=0
         itnum=0
         for b, s, e in self.bse[start:end]:
@@ -243,7 +242,6 @@ class BatchAttackInstance:
         if end is None:
             end = len(self.bse)
         G = GSO.Mat( IntegerMatrix.from_matrix( self.H ), float_type="mpfr" )
-        # G = self.G
         G.update_gso()
 
         mindds, minddinfs = [], []
@@ -302,7 +300,6 @@ class BatchAttackInstance:
             # - - - Admissibility: check that babai(guess2 + err) = babai(guess2) + babai(err) - - -
 
             true_err = np.concatenate([e,-s[:-self.kappa]])[-self.cd:]
-            # true_err = np.atleast_2d(true_err).T
             tmp0batch = sec_proj2_cols + true_err[:,None]
             W = proj_submatrix_modulus_blas( Rpart2, tmp0batch, dim=self.cd )
             tmp0batch = tmp0batch + Rpart2@W
@@ -312,7 +309,7 @@ class BatchAttackInstance:
             tmp1batch = tmp1batch + Rpart2@W
 
             true_err = np.atleast_2d(true_err).T.astype(np.float64)
-            W = proj_submatrix_modulus_blas( Rpart2, true_err, dim=self.cd ) #np.array([true_err]) ?
+            W = proj_submatrix_modulus_blas( Rpart2, true_err, dim=self.cd )
             tmp2 = true_err + Rpart2@W
 
             is_adm = []
@@ -321,85 +318,8 @@ class BatchAttackInstance:
                 okay = all(np.isclose(col,0.0,atol=0.001))
                 is_adm.append(okay)
 
-            return eucl, infnrm, sum(is_adm) #len(dbatch)*[False]
+            return eucl, infnrm, sum(is_adm) 
 
-            # d = tshift1 - tshift2  
-            # d = G.from_canonical( d )
-            # d = (self.H.nrows-self.cd)*[0] + list(d[-self.cd:])
-            # d = np.asarray( G.to_canonical(d) )
-
-            # #tshift2
-            # is_adm_right = False
-            # tshift2 = proj_submatrix_modulus(G,sec_proj2+true_err,dim=self.cd)
-            # tmp1 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
-            # tmp2 = proj_submatrix_modulus(G,true_err,dim=self.cd)
-            # tmp12 = tshift2 - (tmp1+tmp2)
-            # is_adm = False
-            # if all(np.isclose(tmp12,0.0,atol=0.001)):
-            #     is_adm_right=True
-
-            # eucl = (d @ d)**0.5
-            # infnrm = np.max(np.abs(d))
-
-            # return eucl, infnrm, is_adm_right #(is_adm_left,is_adm_right)
-
-        # - - - - - - - - - - - - - - - - - - - - - - - - - borderplate
-        # def _trial_worker(trie_idx, batch_size, b, s_correct_guess,s,e):
-        #     # create a local RNG to avoid shared-state race
-        #     seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
-        #     rng = random.Random(seed)
-
-        #     # ensure numpy arrays for elementwise ops
-        #     s_corr_np = np.asarray(s_correct_guess)
-
-        #     if correct:
-        #         if USE_MASK:
-        #             msk_sublen = rng.randrange(self.kappa//2, self.kappa)
-        #             msk = msk_sublen*[1] + (self.kappa - msk_sublen)*[0]
-        #             rng.shuffle(msk)
-        #             msk_np = np.asarray(msk)
-        #             sguess_1 = s_corr_np * msk_np
-        #             sguess_2 = -sguess_1 + s_corr_np
-        #         else:
-        #             s_delta = np.asarray( [ (randrange(-1,2)) for j in range(self.kappa) ] )
-        #             sguess_1 = s_delta
-        #             sguess_2 = -sguess_1 + s_corr_np                
-        #     else:
-        #         sguess_1 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
-        #         sguess_2 = np.asarray([ randrange(-1,2) for _ in range(len(s_corr_np)) ])
-
-        #     # compute projections and shifts
-        #     sec_proj1 = ( sguess_1 @ self.C )
-        #     t1 = np.concatenate( [b,(self.n-self.kappa)*[0]] )
-        #     tshift1 = proj_submatrix_modulus(G,t1-sec_proj1,dim=self.cd)
-                
-        #     sec_proj2 = ( sguess_2 @ self.C )
-        #     true_err = np.concatenate([e,-s[:-self.kappa]])
-        #     tshift2 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd) 
-        #     #NOTE: no true_err above since we cannot use it in the attack
-        #     #thus RHS [NP(sec_proj2+true_err)] of MitM equation is approximated with NP(sec_proj2)
-        #     #while LHS = RHS is replaced with LHS is close to RHS with admis. proba.
-
-        #     d = tshift1 - tshift2  
-        #     d = G.from_canonical( d )
-        #     d = (self.H.nrows-self.cd)*[0] + list(d[-self.cd:])
-        #     d = np.asarray( G.to_canonical(d) )
-
-        #     #tshift2
-        #     is_adm_right = False
-        #     tshift2 = proj_submatrix_modulus(G,sec_proj2+true_err,dim=self.cd)
-        #     tmp1 = proj_submatrix_modulus(G,sec_proj2,dim=self.cd)
-        #     tmp2 = proj_submatrix_modulus(G,true_err,dim=self.cd)
-        #     tmp12 = tshift2 - (tmp1+tmp2)
-        #     is_adm = False
-        #     if all(np.isclose(tmp12,0.0,atol=0.001)):
-        #         is_adm_right=True
-
-        #     eucl = (d @ d)**0.5
-        #     infnrm = np.max(np.abs(d))
-
-        #     return eucl, infnrm, is_adm_right #(is_adm_left,is_adm_right)
-        # - - - - - - - - - - - - - - - - - - - - - - - - - 
 
         # For each (b,s,e) in bse, run n_trials of _trial_worker (parallelised)
         is_adm_num = 0
@@ -410,7 +330,7 @@ class BatchAttackInstance:
             minddinf = float('inf')
             s_correct_guess = s[-self.kappa:]
 
-            n_trials_normalized = (n_trials)//num_per_batch + 1 #num_per_batch used to be one
+            n_trials_normalized = (n_trials)//num_per_batch #num_per_batch used to be one
             if n_workers is None or n_workers <= 1:
                 # sequential fallback
                 for tries in range(n_trials_normalized):
@@ -514,7 +434,7 @@ def run_single_instance(idx: int,
             #estimation of projected length (95th percentile)
             nrmper = np.percentile( nrms, 0.95 ) * ( lwe_instance.cd / (n+m) )**2
 
-        # same beta schedule as your original code: 30, then 40..beta_max-1
+        # beta schedule: 30, then 40..beta_max-1
         for beta in list(range(40, beta_max+1, 1)):
             t0 = perf_counter()
             lwe_instance.reduce(beta=beta, bkz_tours=2, 
@@ -565,6 +485,7 @@ def run_single_instance(idx: int,
     print(f"incorrect adm: {is_adm_num_incorrect}")
 
     return {
+        "version": "0.0.1",  #file format version
         "idx": idx,
         "seed": seed,
         'n': n,
@@ -594,17 +515,19 @@ def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 100 ## per-lattice instances #20
+    n_tars = 20 ## per-lattice instances #20
     n_trials = 8192*4          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
     num_per_batch = 8192
     inner_n_workers = 8    # threads for inner parallelism
 
-    n, m, q = 128, 128, 3329
+    assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
+
+    n, m, q = 90, 90, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
-    kappa = 16
+    kappa = 20
     cd = 50
-    beta_max = 62
+    beta_max = 50
     verify_min_gh = 1.0
 
     os.makedirs(in_path, exist_ok=True)
