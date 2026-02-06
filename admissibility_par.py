@@ -448,7 +448,8 @@ class BatchAttackInstance:
             target_num += 1
             print(f"mindd, minddinf: {mindd, minddinf}")
             print(f"is_adm_num: {is_adm_num} | {n_trials_normalized*num_per_batch}")
-            print(f"{target_num} out of {end-start} targets done")
+            if target_num%10==0:
+                print(f"{target_num} out of {end-start} targets done", flush=True)
             # is_adm_nums.append(is_adm_num)
             is_adm_nums.append(is_adm_num)
             is_adm_num = 0
