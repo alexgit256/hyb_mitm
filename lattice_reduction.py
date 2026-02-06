@@ -22,10 +22,12 @@ Otherwise BLASter's LLL is run.
 
 FPLLL.set_precision(180)
 
+G6K_IMPORTED = False
 try:
   from g6k import Siever, SieverParams
   from g6k.algorithms.bkz import pump_n_jump_bkz_tour
   from g6k.utils.stats import dummy_tracer
+  G6K_IMPORTED = True
 except ImportError:
     pass
 #   raise ImportError("g6k not installed")
@@ -139,9 +141,8 @@ class LatticeReduction:
             verbose=verbose, logfile=logfile, anim=None, depth=depth,
             use_seysen=use_seysen, bkz_tours=bkz_tours, beta=beta)[1].transpose()
         else:
-            # G = GSO.Mat(B_trunc, float_type="double", 
-            # U=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type),
-            # UinvT=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type))
+            if not G6K_IMPORTED:
+                raise RuntimeError("Cannot go beyond dim 64: g6k is not installed.")
             G = make_gso_mat( B_trunc )
             G.update_gso()
             
