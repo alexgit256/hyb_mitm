@@ -246,6 +246,14 @@ class BatchAttackInstance:
 
         mindds, minddinfs = [], []
 
+        #updated T inplace
+        def _apply_proj_submatrix_modulus(R,T,dim=None):
+            T = T[-self.cd:]
+            Tnew = copy(T)
+            U2 = proj_submatrix_modulus_blas( R, Tnew, dim=dim )
+            T += Tnew + self.R[-self.cd:,-self.cd:]@U2
+            return T
+
         # Helper that performs a single trial for current (b, s_correct_guess)
         def _trial_worker(trie_idx, batch_size, b, s_correct_guess,s,e):
             # create a local RNG to avoid shared-state race
@@ -272,28 +280,27 @@ class BatchAttackInstance:
                 sguess_1 = add_signed_uniform_noise(rng, sguess_1, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
                 sguess_2 = add_signed_uniform_noise(rng, sguess_2, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
 
-            Rpart1, Rpart2 = copy(self.R[-self.cd:,-self.cd:]), copy(self.R[-self.cd:,-self.cd:])
             # compute projections and shifts
             sec_proj1_cols = self.QinvCT@sguess_1  #note: sguess_1 is a guess, so we can use it here
 
             t1 = self.Qinv@np.concatenate( [b,(self.n-self.kappa)*[0]] ) #original target alligned wrt GS vectors
             tbatch1 = t1[:,None] - sec_proj1_cols   #t1 = target - guess_1
-            tbatch1 = tbatch1[-self.cd:]    #project target to the last self.cd dim. proj sublat
-            tbatch1_copy = copy(tbatch1) #next line modifies tbatch1, so we need a copy
-
-            U1 = proj_submatrix_modulus_blas( Rpart1, tbatch1, dim=self.cd ) #find a proj lattice vector close to -t1
-            tshiftbatch1 = tbatch1 
-            tmp = Rpart1@U1
-            tshiftbatch1 += tbatch1_copy + tmp #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
+            # tbatch1 = tbatch1[-self.cd:]    #project target to the last self.cd dim. proj sublat
+            # tbatch1_copy = copy(tbatch1) #next line modifies tbatch1, so we need a copy
+            # U1 = proj_submatrix_modulus_blas( Rpart1, tbatch1, dim=self.cd ) #find a proj lattice vector close to -t1
+            # tmp = Rpart1@U1
+            # tbatch1 += tbatch1_copy + tmp #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
+            tbatch1 = _apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], tbatch1, dim=self.cd )
 
             sec_proj2_cols = self.QinvCT@sguess_2 #t2
             sec_proj2_cols = sec_proj2_cols[-self.cd:]
-            tbatch2 = copy(sec_proj2_cols)
-            U2 = proj_submatrix_modulus_blas( Rpart2, tbatch2, dim=self.cd )
-            tshiftbatch2 = tbatch2 + self.R[-self.cd:,-self.cd:]@U2 #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
+            tbatch2 = copy(sec_proj2_cols) #we will still need sec_proj2_cols intact
+            # U2 = proj_submatrix_modulus_blas( Rpart2, tbatch2, dim=self.cd )
+            # tbatch2 += tbatch2 + self.R[-self.cd:,-self.cd:]@U2 #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
+            tbatch2 = _apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], sec_proj2_cols, dim=self.cd )
             
 
-            dbatch = tshiftbatch1 - tshiftbatch2 #delta betveen babai(t1) and babai(t2)
+            dbatch = tbatch1 - tbatch2 #delta betveen babai(t1) and babai(t2)
             eucl = [ (tmp@tmp)**0.5 for tmp in dbatch.T ]
             infnrm = [ np.max(np.abs(tmp)) for tmp in dbatch.T ]
 
@@ -301,16 +308,16 @@ class BatchAttackInstance:
 
             true_err = np.concatenate([e,-s[:-self.kappa]])[-self.cd:]
             tmp0batch = sec_proj2_cols + true_err[:,None]
-            W = proj_submatrix_modulus_blas( Rpart2, tmp0batch, dim=self.cd )
-            tmp0batch = tmp0batch + Rpart2@W
+            W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp0batch, dim=self.cd )
+            tmp0batch = tmp0batch + self.R[-self.cd:,-self.cd:]@W
 
             tmp1batch = sec_proj2_cols
-            W = proj_submatrix_modulus_blas( Rpart2, tmp1batch, dim=self.cd )
-            tmp1batch = tmp1batch + Rpart2@W
+            W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp1batch, dim=self.cd )
+            tmp1batch = tmp1batch + self.R[-self.cd:,-self.cd:]@W
 
             true_err = np.atleast_2d(true_err).T.astype(np.float64)
-            W = proj_submatrix_modulus_blas( Rpart2, true_err, dim=self.cd )
-            tmp2 = true_err + Rpart2@W
+            W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], true_err, dim=self.cd )
+            tmp2 = true_err + self.R[-self.cd:,-self.cd:]@W
 
             is_adm = []
             tmp12 = tmp0batch - (tmp1batch+tmp2)
@@ -434,7 +441,6 @@ def run_single_instance(idx: int,
             #estimation of projected length (95th percentile)
             nrmper = np.percentile( nrms, 0.95 ) * ( lwe_instance.cd / (n+m) )**2
 
-        # beta schedule: 30, then 40..beta_max-1
         for beta in list(range(40, beta_max+1, 1)):
             t0 = perf_counter()
             lwe_instance.reduce(beta=beta, bkz_tours=2, 
@@ -514,21 +520,21 @@ def run_single_instance(idx: int,
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
-    n_lats = 2  # number of lattices    #5
-    n_tars = 20 ## per-lattice instances #20
-    n_trials = 8192*4          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
-    num_per_batch = 8192
-    inner_n_workers = 8    # threads for inner parallelism
+    n_lats = 1  # number of lattices    #5
+    n_tars = 1 ## per-lattice instances #20
+    n_trials = 128*2          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
+    num_per_batch = 128
+    inner_n_workers = 2    # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 256, 256, 3329
+    n, m, q = 80, 80, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
-    kappa = 156
+    kappa = 10
     cd = 50
     beta_max = 50
-    verify_min_gh = 1.0
+    verify_min_gh = 0.98
 
     os.makedirs(in_path, exist_ok=True)
 
