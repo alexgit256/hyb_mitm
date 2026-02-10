@@ -520,8 +520,8 @@ def run_single_instance(idx: int,
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     max_workers = 2  # set this >1 to parallelize across instances
-    n_lats = 1  # number of lattices    #5
-    n_tars = 1 ## per-lattice instances #20
+    n_lats = 2  # number of lattices    #5
+    n_tars = 10 ## per-lattice instances #20
     n_trials = 128*2          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
     num_per_batch = 128
     inner_n_workers = 2    # threads for inner parallelism
