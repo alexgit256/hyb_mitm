@@ -246,7 +246,22 @@ class BatchAttackInstance:
 
         mindds, minddinfs = [], []
 
-        #updated T inplace
+        def _make_correct_guesses(s_corr, batch_size, rng):
+            kappa = s_corr.size
+
+            msk_sublen = rng.integers(self.kappa//2, self.kappa, size=batch_size)
+
+            # build masks: shape (kappa, B)
+            msk = np.zeros((kappa, batch_size), dtype=np.int8)
+            for j in range(batch_size):
+                msk[:msk_sublen[j], j] = 1
+                rng.shuffle(msk[:, j])
+
+            # broadcast s_corr[:,None]
+            sguess_1 = msk * s_corr[:, None] 
+            sguess_2 = -sguess_1 + s_corr[:, None] 
+
+        #updates T inplace
         def _apply_proj_submatrix_modulus(R,T,dim=None):
             T = T[-self.cd:]
             Tnew = copy(T)
@@ -519,28 +534,28 @@ def run_single_instance(idx: int,
 
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
-    max_workers = 2  # set this >1 to parallelize across instances
+    n_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 10 ## per-lattice instances #20
-    n_trials = 128*2          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
-    num_per_batch = 128
+    n_tars = 50 ## per-lattice instances #20
+    n_trials = 2048*16          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
+    num_per_batch = 2048
     inner_n_workers = 2    # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 80, 80, 3329
+    n, m, q = 100, 100, 3329
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
     kappa = 10
-    cd = 50
+    cd = 80
     beta_max = 50
-    verify_min_gh = 0.98
+    verify_min_gh = 0.86
 
     os.makedirs(in_path, exist_ok=True)
 
     results = []
     # use processes for independent instances (CPU-bound)
-    with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = {
             executor.submit(
                 run_single_instance,

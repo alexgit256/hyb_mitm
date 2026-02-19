@@ -15,7 +15,7 @@ from size_reduction import is_lll_reduced, is_weakly_lll_reduced, size_reduce, s
 from stats import get_profile, rhf, slope, potential
 from lattice_io import read_qary_lattice, write_lattice
 
-from random import randrange
+from random import randrange, uniform
 
 from copy import copy, deepcopy
 
@@ -23,6 +23,30 @@ from fpylll import *
 from lattice_reduction import LatticeReduction
 
 from utils import proj_submatrix_modulus_blas
+
+def proj_submatrix_modulus_blas(R,T,dim=None):
+    """
+
+    Given Q, R, T, U where R is the R-factor, finds the coordinates of the corresponding babai-close lattice vectors.
+    :param R: upper-triangular basis of a lattice.
+    :param T: matrix containing many targets requiring reduction.
+    :param U: the output transformation used to reduce T wrt R.
+    """
+    m, n = np.shape(T) #m - num basis vects, 
+
+    d = np.shape(R)[1]
+    if dim is None:
+        dim = d
+    elif not (1 <= dim <= d):
+        raise ValueError("dim must be in [1, G.B.nrows]")
+
+    # Tproj = T[d-dim:] #projection of arbitrary many columns of T onto the last dim coords
+    # Rproj = R[d-dim:,d-dim:] #R-factor of the last dim dimensional projective sublattice
+    U = np.zeros( (dim,n),dtype=np.int64 )
+
+    nearest_plane(R,T,U)
+
+    return U
 
 # def nearest_plane(R, T, U):
 """
@@ -74,36 +98,50 @@ def read_lattice(input_file=None):
 def batch_babai(R,T,U):
     return nearest_plane( R,T,U )
 
+def assert_near_integers(W_cand: np.ndarray, *, atol=1e-8, rtol=0.0):
+    W = np.asarray(W_cand, dtype=float)
+    W_round = np.rint(W)  # nearest integer, stays float
+    if not np.allclose(W, W_round, atol=atol, rtol=rtol, equal_nan=False):
+        bad = np.flatnonzero(~np.isclose(W, W_round, atol=atol, rtol=rtol))
+        i = bad[0]
+        raise AssertionError(
+            f"W_cand has non-integer entries (within tol). "
+            f"Example idx={np.unravel_index(i, W.shape)}, "
+            f"value={W.flat[i]!r}, nearest_int={W_round.flat[i]!r}, "
+            f"abs_err={abs(W.flat[i]-W_round.flat[i]):.3e}"
+        )
+
 n = 144
 
-A = IntegerMatrix(n,n)
-A.randomize("qary", k=n//2, bits=14.2)
+# A = IntegerMatrix(n,n)
+# A.randomize("qary", k=n//2, bits=14.2)
 
-t0 = perf_counter()
-LR = LatticeReduction( A )
-print(f"flatter done in: {perf_counter()-t0}")
+# t0 = perf_counter()
+# LR = LatticeReduction( A )
+# print(f"flatter done in: {perf_counter()-t0}")
 
-for beta in [14,40,24,30,66]:
-    t0 = perf_counter()
-    LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
-    print(f"BKZ-{beta} done in: {perf_counter()-t0}")
-for beta in range(40,43):
-    t0 = perf_counter()
-    LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
-    print(f"BKZ-{beta} done in: {perf_counter()-t0}")
+# for beta in [14,40,24,30,66]:
+#     t0 = perf_counter()
+#     LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
+#     print(f"BKZ-{beta} done in: {perf_counter()-t0}")
+# for beta in range(40,43):
+#     t0 = perf_counter()
+#     LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
+#     print(f"BKZ-{beta} done in: {perf_counter()-t0}")
 
-A = np.array( list(line for line in LR.B) ).transpose()
-print(A)
-write_lattice( A, output_file=f"lattst_{n}.txt" )
+# A = np.array( list(line for line in LR.B) ).transpose()
+# print(A)
+# write_lattice( A, output_file=f"lattst_{n}.txt" )
 
 A = read_lattice( f"lattst_{n}.txt" )
 
 n, _ = np.shape( A )
-m =  20000
-start_at = n-50
+m =  144
+cd = 50
+start_at = n-cd
 
 S = np.array([
-    [ randrange(-4,5) for i in range(m)  ] for j in range(n)
+    [ (i-j)%n for i in range(m)  ] for j in range(n)
 ])
 
 E = np.array([
@@ -130,26 +168,57 @@ Tcp = deepcopy(T)[start_at:]
 
 t0 = perf_counter()
 nearest_plane(Rcp, Tcp, U)
+U = -U
 print(f"NP done in: {perf_counter()-t0}")
 
-lines = ( T[start_at:] + R[start_at:,start_at:]@U.astype(np.float64) )
+lines = ( T[start_at:] - R[start_at:,start_at:]@U.astype(np.float64) )
 dR = np.diag(R)
 for i in range( start_at,n ):
     assert all( np.abs(lines[i-start_at] / dR[i]) < 0.501 ), f"Noo: {lines[i-start_at] / dR[i]}"
+print("- - - manual check")
+W_cand = np.linalg.inv(R[-cd:,-cd:])@(T[start_at:]-lines)
+print(np.round(W_cand))
+assert_near_integers(W_cand)
+print("- - -")
 
 print("u:")
 print(U)
 print()
 print( np.shape(lines) )
 
-Rcpp = deepcopy(R)[start_at:,start_at:]
-Tcpp = deepcopy(T)[start_at:] #!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# Rcpp = deepcopy(R)[start_at:,start_at:]
+# Tcpp = deepcopy(T)[start_at:] #!
 
-t0 = perf_counter()
-Ucpp = proj_submatrix_modulus_blas( Rcpp,Tcpp )
-print(f"Matmod done in: {perf_counter()-t0}")
+# t0 = perf_counter()
+# Ucpp = proj_submatrix_modulus_blas( Rcpp,Tcpp )
+# print(f"Matmod done in: {perf_counter()-t0}")
 
-lines = ( T[start_at:] + R[start_at:,start_at:]@Ucpp.astype(np.float64) )
-dR = np.diag(R)
-for i in range( start_at,n ):
-    assert all( np.abs(lines[i-start_at] / dR[i]) < 0.501 ), f"Noo: {lines[i-start_at] / dR[i]}"
+# lines = ( T[start_at:] + R[start_at:,start_at:]@Ucpp.astype(np.float64) )
+# dR = np.diag(R)
+# for i in range( start_at,n ):
+#     assert all( np.abs(lines[i-start_at] / dR[i]) < 0.501 ), f"Noo: {lines[i-start_at] / dR[i]}"
+# print("- - - lines my")
+# W_cand = np.linalg.inv(R[-cd:,-cd:])@(T[start_at:]-lines)
+# print(np.round(W_cand))
+# assert_near_integers(W_cand)
+# print("- - -")
+
+B = IntegerMatrix.from_matrix(A.T)
+G = GSO.Mat(B,float_type="dd")
+G.update_gso()
+
+T_canon = A@S+E
+
+W = []
+for s in T_canon.T:
+    w = G.babai(s)
+    W.append( w )
+W = np.array( W ).T
+
+print("W:")
+print(W[-cd:])
+print("S: ")
+print(S[-cd:])
+print()
+assert not np.any(U-S[-cd:])
+
