@@ -274,7 +274,7 @@ Complexity: O(N n^{omega-1}) if R is a `n x n` matrix, T is a `n x N` matrix, an
 def proj_submatrix_modulus_blas(R,T,dim=None):
     """
 
-    Given Q, R, T, U where R is the R-factor, finds the coordinates of the corresponding babai-close lattice vectors.
+    Given R, T, U where R is the R-factor, finds the coordinates of the corresponding babai-close lattice vectors.
     :param R: upper-triangular basis of a lattice.
     :param T: matrix containing many targets requiring reduction.
     :param U: the output transformation used to reduce T wrt R.
@@ -287,8 +287,6 @@ def proj_submatrix_modulus_blas(R,T,dim=None):
     elif not (1 <= dim <= d):
         raise ValueError("dim must be in [1, G.B.nrows]")
 
-    Tproj = T[d-dim:] #projection of arbitrary many columns of T onto the last dim coords
-    Rproj = R[d-dim:,d-dim:] #R-factor of the last dim dimensional projective sublattice
     U = np.zeros( (dim,n),dtype=np.int64 )
 
     nearest_plane(R,T,U)

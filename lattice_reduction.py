@@ -10,8 +10,9 @@ import subprocess
 from random import randrange
 
 from precision_wrapper import make_gso_mat
+from copy import copy
 
-from blaster import reduce
+from blaster import reduce, lll_reduce, TimeProfile
 # def bkz_reduce(B, U, U_seysen, lll_size, delta, depth,
 #                beta, bkz_tours, bkz_size, tprof, tracers, debug, use_seysen):
 """
@@ -99,10 +100,57 @@ class LatticeReduction:
     def __init__(self,B):
         self.B = flatter_interface( IntegerMatrix.from_matrix( B ) )
 
+    # def LLL(self, B, lll_size  = 64, delta: float = 0.99, start=0, end=None, cores=1,use_seysen  = True):
+    #     if end is None or end==-1:
+    #         end = self.B.nrows
+
+    #     tprof = TimeProfile(use_seysen)
+        
+    #     B_trunc = IntegerMatrix.from_matrix( [self.B[i] for i in range(start,end)] )
+    #     B_trunc = np.array([list(tmp) for tmp in B_trunc]).transpose()
+    #     B_trunc = np.ascontiguousarray(B_trunc, dtype=np.int64)
+    #     U = np.identity(B_trunc.shape[1], dtype=np.int64)
+    #     U_seysen = np.identity(B_trunc.shape[1], dtype=np.int64)
+    #     lll_reduce(B_trunc, U, U_seysen, lll_size, delta, depth=0, tprof=tprof,tracers={}, debug=False, use_seysen=use_seysen )
+    #     self.B = IntegerMatrix.from_matrix( [self.B[i] for i in range(start)] + [b for b in B_trunc] + [self.B[i] for i in range(end,self.B.nrows)] )
+
+    def LLL(self, B=None, lll_size=64, delta: float = 0.99,
+        start=0, end=None, cores=1, use_seysen=True):
+
+        nrows = self.B.nrows
+        ncols = self.B.ncols
+
+        if end is None or end == -1:
+            end = nrows
+        if not (0 <= start <= end <= nrows):
+            raise ValueError(f"Bad slice: start={start}, end={end}, nrows={nrows}")
+
+        tprof = TimeProfile(use_seysen)
+
+        rows = np.array([list(self.B[i]) for i in range(start, end)], dtype=np.int64)
+        B_np = np.ascontiguousarray(rows.T)
+
+        k = B_np.shape[1]
+        U = np.eye(k, dtype=np.int64)
+        U_seysen = np.eye(k, dtype=np.int64) if use_seysen else None
+
+        lll_reduce(B_np, U, U_seysen, lll_size, delta,
+                depth=0, tprof=tprof, tracers={}, debug=False, use_seysen=use_seysen)
+
+        reduced_rows = B_np.T  # (k, ncols)
+
+        # --- elementwise assignment ---
+        # (start+i, j) addressing is supported
+        for i in range(end - start):
+            row = reduced_rows[i]
+            bi = start + i
+            for j in range(ncols):
+                self.B[bi, j] = int(row[j])
+
 
     def __call__(self, lll_size  = 64, delta: float = 0.99, start=0, end=None, cores=1, debug  = False,
         verbose  = False, logfile  = None, anim  = None, depth  = 0,
-        use_seysen  = False, beta=2, bkz_tours=1, use_blaster=True, **kwds):
+        use_seysen  = True, beta=2, bkz_tours=1, use_blaster=True, **kwds):
         """
         Reduces self.B.
         lll_size: sub-LLL blocksize.
@@ -117,10 +165,6 @@ class LatticeReduction:
       
         B_trunc = IntegerMatrix.from_matrix( [self.B[i] for i in range(start,end)] )
         if beta<40:
-            ft = "mpfr" if self.B.nrows > 400 else ("double" if self.B.nrows < 140 else "dd")
-            # G = GSO.Mat(B_trunc, float_type=ft,
-            # U=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type),
-            # UinvT=IntegerMatrix.identity(B_trunc.nrows, int_type=B_trunc.int_type))
             G = make_gso_mat( B_trunc )
             G.update_gso()
             lll = LLL.Reduction(G)

@@ -17,6 +17,8 @@ from utils import *
 from math import log,e, pi
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threadpoolctl import threadpool_limits
+THREADPOOL_LIMIT = 0 #set to 0 to allow max number of workers
 from typing import Dict, Any
 import concurrent.futures
 
@@ -246,21 +248,6 @@ class BatchAttackInstance:
 
         mindds, minddinfs = [], []
 
-        def _make_correct_guesses(s_corr, batch_size, rng):
-            kappa = s_corr.size
-
-            msk_sublen = rng.integers(self.kappa//2, self.kappa, size=batch_size)
-
-            # build masks: shape (kappa, B)
-            msk = np.zeros((kappa, batch_size), dtype=np.int8)
-            for j in range(batch_size):
-                msk[:msk_sublen[j], j] = 1
-                rng.shuffle(msk[:, j])
-
-            # broadcast s_corr[:,None]
-            sguess_1 = msk * s_corr[:, None] 
-            sguess_2 = -sguess_1 + s_corr[:, None] 
-
         #updates T inplace
         def _apply_proj_submatrix_modulus(R,T,dim=None):
             T = T[-self.cd:]
@@ -271,74 +258,70 @@ class BatchAttackInstance:
 
         # Helper that performs a single trial for current (b, s_correct_guess)
         def _trial_worker(trie_idx, batch_size, b, s_correct_guess,s,e):
-            # create a local RNG to avoid shared-state race
-            seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
-            rng = np.random.default_rng(seed)
+            with threadpool_limits(limits=THREADPOOL_LIMIT):
+                # create a local RNG to avoid shared-state race
+                seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
+                rng = np.random.default_rng(seed)
 
-            # ensure numpy arrays for elementwise ops
-            s_corr = np.asarray(s_correct_guess, dtype=np.int64)
-            kappa = s_corr.size
+                # ensure numpy arrays for elementwise ops
+                s_corr = np.asarray(s_correct_guess, dtype=np.int64)
+                kappa = s_corr.size
 
-            # if correct:
-            msk_sublen = rng.integers(self.kappa//2, self.kappa, size=batch_size)
+                # if correct:
+                msk_sublen = rng.integers(self.kappa//2, self.kappa, size=batch_size)
 
-            # build masks: shape (kappa, B)
-            msk = np.zeros((kappa, batch_size), dtype=np.int8)
-            for j in range(batch_size):
-                msk[:msk_sublen[j], j] = 1
-                rng.shuffle(msk[:, j])
+                # build masks: shape (kappa, B)
+                msk = np.zeros((kappa, batch_size), dtype=np.int8)
+                for j in range(batch_size):
+                    msk[:msk_sublen[j], j] = 1
+                    rng.shuffle(msk[:, j])
 
-            # broadcast s_corr[:,None]
-            sguess_1 = msk * s_corr[:, None] 
-            sguess_2 = -sguess_1 + s_corr[:, None]    
-            if not correct: #simulate a "slight" misguess 
-                sguess_1 = add_signed_uniform_noise(rng, sguess_1, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
-                sguess_2 = add_signed_uniform_noise(rng, sguess_2, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
+                # broadcast s_corr[:,None]
+                sguess_1 = msk * s_corr[:, None] 
+                sguess_2 = -sguess_1 + s_corr[:, None]    
+                if not correct: #simulate a "slight" misguess 
+                    # sguess_1 = add_signed_uniform_noise(rng, sguess_1, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
+                    # sguess_2 = add_signed_uniform_noise(rng, sguess_2, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
+                    sguess_1 += rng.integers(-1, 2, size=(kappa, batch_size), dtype=np.int16)
+                    sguess_2 += rng.integers(-1, 2, size=(kappa, batch_size), dtype=np.int16)
 
-            # compute projections and shifts
-            sec_proj1_cols = self.QinvCT@sguess_1  #note: sguess_1 is a guess, so we can use it here
+                # compute projections and shifts
+                sec_proj1_cols = self.QinvCT@sguess_1  #note: sguess_1 is a guess, so we can use it here
 
-            t1 = self.Qinv@np.concatenate( [b,(self.n-self.kappa)*[0]] ) #original target alligned wrt GS vectors
-            tbatch1 = t1[:,None] - sec_proj1_cols   #t1 = target - guess_1
-            # tbatch1 = tbatch1[-self.cd:]    #project target to the last self.cd dim. proj sublat
-            # tbatch1_copy = copy(tbatch1) #next line modifies tbatch1, so we need a copy
-            # U1 = proj_submatrix_modulus_blas( Rpart1, tbatch1, dim=self.cd ) #find a proj lattice vector close to -t1
-            # tmp = Rpart1@U1
-            # tbatch1 += tbatch1_copy + tmp #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
-            tbatch1 = _apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], tbatch1, dim=self.cd )
+                t1 = self.Qinv@np.concatenate( [b,(self.n-self.kappa)*[0]] ) #original target alligned wrt GS vectors
+                tbatch1 = t1[:,None] - sec_proj1_cols   #t1 = target - guess_1
+                tbatch1 = _apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], tbatch1, dim=self.cd )
 
-            sec_proj2_cols = self.QinvCT@sguess_2 #t2
-            sec_proj2_cols = sec_proj2_cols[-self.cd:]
-            tbatch2 = copy(sec_proj2_cols) #we will still need sec_proj2_cols intact
-            # U2 = proj_submatrix_modulus_blas( Rpart2, tbatch2, dim=self.cd )
-            # tbatch2 += tbatch2 + self.R[-self.cd:,-self.cd:]@U2 #fd.: see how nearest_plane works. tshiftbatch2 is now in fund. par.
-            tbatch2 = _apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], sec_proj2_cols, dim=self.cd )
-            
+                sec_proj2_cols = self.QinvCT@sguess_2 #t2
+                sec_proj2_cols = sec_proj2_cols[-self.cd:] #go to the projective sublattice
+                tbatch2 = copy(sec_proj2_cols) #we will still need sec_proj2_cols intact
+                tbatch2 = _apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], sec_proj2_cols, dim=self.cd )
+                
 
-            dbatch = tbatch1 - tbatch2 #delta betveen babai(t1) and babai(t2)
-            eucl = [ (tmp@tmp)**0.5 for tmp in dbatch.T ]
-            infnrm = [ np.max(np.abs(tmp)) for tmp in dbatch.T ]
+                dbatch = tbatch1 - tbatch2 #delta betveen babai(t1) and babai(t2)
+                eucl = [ (tmp@tmp)**0.5 for tmp in dbatch.T ]
+                infnrm = [ np.max(np.abs(tmp)) for tmp in dbatch.T ]
 
-            # - - - Admissibility: check that babai(guess2 + err) = babai(guess2) + babai(err) - - -
+                # - - - Admissibility: check that babai(guess2 + err) = babai(guess2) + babai(err) - - -
 
-            true_err = np.concatenate([e,-s[:-self.kappa]])[-self.cd:]
-            tmp0batch = sec_proj2_cols + true_err[:,None]
-            W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp0batch, dim=self.cd )
-            tmp0batch = tmp0batch + self.R[-self.cd:,-self.cd:]@W
+                true_err = np.concatenate([e,-s[:-self.kappa]])[-self.cd:]
+                tmp0batch = sec_proj2_cols + true_err[:,None]
+                W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp0batch, dim=self.cd )
+                tmp0batch = tmp0batch + self.R[-self.cd:,-self.cd:]@W
 
-            tmp1batch = sec_proj2_cols
-            W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp1batch, dim=self.cd )
-            tmp1batch = tmp1batch + self.R[-self.cd:,-self.cd:]@W
+                tmp1batch = sec_proj2_cols
+                W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp1batch, dim=self.cd )
+                tmp1batch = tmp1batch + self.R[-self.cd:,-self.cd:]@W
 
-            true_err = np.atleast_2d(true_err).T.astype(np.float64)
-            W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], true_err, dim=self.cd )
-            tmp2 = true_err + self.R[-self.cd:,-self.cd:]@W
+                true_err = np.atleast_2d(true_err).T.astype(np.float64)
+                W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], true_err, dim=self.cd )
+                tmp2 = true_err + self.R[-self.cd:,-self.cd:]@W
 
-            is_adm = []
-            tmp12 = tmp0batch - (tmp1batch+tmp2)
-            for col in tmp12.T:
-                okay = all(np.isclose(col,0.0,atol=0.001))
-                is_adm.append(okay)
+                is_adm = []
+                tmp12 = tmp0batch - (tmp1batch+tmp2)
+                for col in tmp12.T:
+                    okay = all(np.isclose(col,0.0,atol=0.001))
+                    is_adm.append(okay)
 
             return eucl, infnrm, sum(is_adm) 
 
@@ -490,6 +473,12 @@ def run_single_instance(idx: int,
         lwe_instance.dump_on_disc(fullpath)
         print(f"[inst {idx}] dumped to {fullpath}")
 
+    finally:
+        lwe_instance = BatchAttackInstance.load_from_disc(fullpath)
+        lwe_instance.cd = cd #technically, this should not be a field?
+        loaded = True
+        print(f"[inst {idx}] loaded from {fullpath}")
+
 
     # run experiments
     print(f"[inst {idx}] check_correct_guess()")
@@ -536,20 +525,20 @@ def main():
     # outer parallelism: number of independent BatchAttackInstance runs
     n_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
-    n_tars = 50 ## per-lattice instances #20
-    n_trials = 2048*16          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
-    num_per_batch = 2048
-    inner_n_workers = 2    # threads for inner parallelism
+    n_tars = 80 ## per-lattice instances #20
+    n_trials = 1024*8 #8192*4          # per-lattice-instance trials in check_pairs_guess_MM. SHOULD be div'e by num_per_batch
+    num_per_batch = 256 #8192
+    inner_n_workers = 1    # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 100, 100, 3329
+    n, m, q = 160, 160, 4096
     seed_base = 0
-    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
-    kappa = 10
-    cd = 80
-    beta_max = 50
-    verify_min_gh = 0.86
+    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 64, "binomial", 2
+    kappa = 20
+    cd = 60
+    beta_max = 48
+    verify_min_gh = 0.97
 
     os.makedirs(in_path, exist_ok=True)
 
