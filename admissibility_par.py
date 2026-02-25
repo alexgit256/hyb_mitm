@@ -240,7 +240,14 @@ class BatchAttackInstance:
         T += Tnew + self.R[-self.cd:,-self.cd:]@U2
         return T
                    
-    def check_pairs_guess_dist(self, start=0, end=None, correct=True, n_trials=10, n_workers=1, num_per_batch=512):
+    def check_pairs_guess_dist(
+            self, start=0, end=None, 
+            correct=True, 
+            n_trials=10, 
+            n_workers=1, 
+            num_per_batch=512,
+            which_exp={"admis","nrms"},
+            ):
         """
         Constructs correct (if correct==True) guesses s=s1-s2 for the MitM attack on LWE and checks if Babai_{H}(t+g2) == Babai(g1),
         where gi = si * C^{-1} (row notation)
@@ -259,7 +266,7 @@ class BatchAttackInstance:
 
         
         # Helper that performs a single trial for current (b, s_correct_guess)
-        def _trial_worker(trie_idx, batch_size, b, s_correct_guess,s,e):
+        def _trial_worker_dist(trie_idx, batch_size, b, s_correct_guess,s,e):
             with threadpool_limits(limits=THREADPOOL_LIMIT):
                 # create a local RNG to avoid shared-state race
                 seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
@@ -306,12 +313,48 @@ class BatchAttackInstance:
 
                 # - - - Admissibility: check that babai(guess2 + err) = babai(guess2) + babai(err) - - -
 
+                # true_err = np.concatenate([e,-s[:-self.kappa]])[-self.cd:]
+                # tmp0batch = sec_proj2_cols + true_err[:,None]
+                # W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp0batch, dim=self.cd )
+                # tmp0batch = tmp0batch + self.R[-self.cd:,-self.cd:]@W
+
+                # tmp1batch = sec_proj2_cols
+                # W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp1batch, dim=self.cd )
+                # tmp1batch = tmp1batch + self.R[-self.cd:,-self.cd:]@W
+
+                # true_err = np.atleast_2d(true_err).T.astype(np.float64)
+                # W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], true_err, dim=self.cd )
+                # tmp2 = true_err + self.R[-self.cd:,-self.cd:]@W
+
+                # is_adm = []
+                # tmp12 = tmp0batch - (tmp1batch+tmp2)
+                # for col in tmp12.T:
+                #     okay = all(np.isclose(col,0.0,atol=0.001))
+                #     is_adm.append(okay)
+
+            return eucl, infnrm 
+        
+        # Helper that performs a single trial for current (b, s_correct_guess)
+        def _trial_worker_admis(trie_idx, batch_size, b, s_correct_guess,s,e):
+            with threadpool_limits(limits=THREADPOOL_LIMIT):
+                # create a local RNG to avoid shared-state race
+                seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
+                rng = np.random.default_rng(seed)
+                kappa = self.kappa
+
+                sguess = rng.integers(-1, 2, size=(kappa,batch_size), dtype=np.int16)
+                sec_proj_cols = self.QinvCT@sguess #t2
+                sec_proj_cols = sec_proj_cols[-self.cd:] #go to the projective sublattice
+                tbatch = copy(sec_proj_cols) #we will still need sec_proj2_cols intact
+
+                # - - - Admissibility: check that babai(guess2 + err) = babai(guess2) + babai(err) - - -
+
                 true_err = np.concatenate([e,-s[:-self.kappa]])[-self.cd:]
-                tmp0batch = sec_proj2_cols + true_err[:,None]
+                tmp0batch = sec_proj_cols + true_err[:,None]
                 W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp0batch, dim=self.cd )
                 tmp0batch = tmp0batch + self.R[-self.cd:,-self.cd:]@W
 
-                tmp1batch = sec_proj2_cols
+                tmp1batch = sec_proj_cols
                 W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp1batch, dim=self.cd )
                 tmp1batch = tmp1batch + self.R[-self.cd:,-self.cd:]@W
 
@@ -325,10 +368,9 @@ class BatchAttackInstance:
                     okay = all(np.isclose(col,0.0,atol=0.001))
                     is_adm.append(okay)
 
-            return eucl, infnrm, sum(is_adm) 
+            return sum(is_adm) 
 
-
-        # For each (b,s,e) in bse, run n_trials of _trial_worker (parallelised)
+        # For each (b,s,e) in bse, run n_trials of _trial_worker_dist (parallelised)
         is_adm_num = 0
         is_adm_nums = []
         target_num = 0
@@ -343,35 +385,54 @@ class BatchAttackInstance:
                 for tries in range(n_trials_normalized):
                     if tries != 0 and tries % 10 == 0:
                         print(f"{tries} out of {n_trials_normalized} done")
-                    eucl, infnrm, is_adm = _trial_worker(tries, num_per_batch, b, s_correct_guess,s,e)
-                    is_adm_num+=is_adm
-                    if np.min(eucl) < mindd:
-                        mindd = np.min(eucl)
-                    if np.min(infnrm) < minddinf:  #TODO: see if admissibility == minimizing the norm
-                        minddinf = np.min(infnrm)
+                    if "admis" in which_exp:
+                        eucl, infnrm = _trial_worker_dist(tries, num_per_batch, b, s_correct_guess,s,e)
+                        if np.min(eucl) < mindd:
+                            mindd = np.min(eucl)
+                        if np.min(infnrm) < minddinf:  #TODO: see if admissibility == minimizing the norm
+                            minddinf = np.min(infnrm)
+                    if "nrms" in which_exp:
+                        is_adm = _trial_worker_admis(tries, num_per_batch, b, s_correct_guess,s,e)
+                        is_adm_num+=is_adm
             else:
                 # parallel execution using ThreadPoolExecutor
                 with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                    futures = {
-                        ex.submit(_trial_worker, tries, num_per_batch, b, s_correct_guess, s, e): tries
-                        for tries in range(n_trials_normalized)
-                    }
+                    fut_kind = {}  # future -> ("dist"|"admis", tries)
 
-                    for fut in as_completed(futures):
-                        tries = futures[fut]
+                    # submit only what is requested
+                    if "admis" in which_exp:
+                        for tries in range(n_trials_normalized):
+                            fut = ex.submit(_trial_worker_dist, tries, num_per_batch, b, s_correct_guess, s, e)
+                            fut_kind[fut] = ("dist", tries)
+
+                    if "nrms" in which_exp:
+                        for tries in range(n_trials_normalized):
+                            fut = ex.submit(_trial_worker_admis, tries, num_per_batch, b, s_correct_guess, s, e)
+                            fut_kind[fut] = ("admis", tries)
+
+                    # collect
+                    for fut in as_completed(fut_kind):
+                        kind, tries = fut_kind[fut]
+
                         if tries != 0 and tries % 10 == 0:
                             print(f"{tries} out of {n_trials_normalized} done")
 
                         try:
-                            eucl, infnrm, is_adm = fut.result()
+                            res = fut.result()
                         except Exception:
-                            print(f"\n_trial_worker crashed for tries={tries}")
-                            traceback.print_exc()          # prints full traceback to stderr
+                            print(f"\n_trial_worker_{kind} crashed for tries={tries}")
+                            traceback.print_exc()
                             continue
 
-                        is_adm_num += is_adm
-                        mindd = min(mindd, float(np.min(eucl)))
-                        minddinf = min(minddinf, float(np.min(infnrm)))
+                        if kind == "dist":
+                            # _trial_worker_dist returns (eucl, infnrm)
+                            eucl, infnrm = res
+                            mindd = min(mindd, float(np.min(eucl)))
+                            minddinf = min(minddinf, float(np.min(infnrm)))
+
+                        else:  # kind == "admis"
+                            # _trial_worker_admis returns sum(is_adm)
+                            is_adm_num += int(res)
             target_num += 1
             print(f"mindd, minddinf: {mindd, minddinf}")
             print(f"is_adm_num: {is_adm_num} | {n_trials_normalized*num_per_batch}")
