@@ -31,6 +31,7 @@ First, create the ``blaster_dev`` conda environment. It should support conda for
     cd ../
     git clone https://github.com/ElenaKirshanova/g6k_hybrid.git
     conda install fpylll cython cysignals flake8 ipython numpy begins pytest requests scipy multiprocessing-logging matplotlib autoconf automake libtool
+    conda install threadpoolctl
     cd ./g6k_hybrid
     #in g6k_hybrid branch ac_artifact
     git checkout ac_artifact
