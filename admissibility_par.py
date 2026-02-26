@@ -18,7 +18,7 @@ from math import log,e, pi
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threadpoolctl import threadpool_limits
-THREADPOOL_LIMIT = 2 #set to 0 to allow max number of workers
+THREADPOOL_LIMIT = 1 #set to 0 to allow max number of workers
 from typing import Dict, Any, Optional
 import concurrent.futures
 from dataclasses import dataclass
@@ -60,50 +60,6 @@ def get_current_datetime():
         return formatted
     except Exception as e:
         return f"Error getting date and time: {e}"
-
-# def add_pm1_noise(rng, sguess, kappa, batch_size, m_low=None, m_high=None, width=1, dtype=np.int8):
-def add_signed_uniform_noise(rng, sguess, kappa, batch_size, w=2, m_low=None, m_high=None, dtype=None):
-    """
-    Add per-column sparse noise where each nonzero entry is uniform in
-    {-w,...,-1, 1,...,w} (no zero).
-
-    For each column j, choose m[j] distinct positions and add that noise there.
-    """
-    w = int(w)
-    if w <= 0:
-        raise ValueError("w must be >= 1")
-
-    if m_low is None:  m_low  = kappa // 2
-    if m_high is None: m_high = kappa
-    m = rng.integers(m_low, m_high, size=batch_size)  # per-column sparsity
-    mmax = int(m.max())
-
-    # Choose positions without per-column shuffles:
-    R = rng.random((kappa, batch_size), dtype=np.float32)
-    idx = np.argpartition(R, kth=kappa - mmax, axis=0)[kappa - mmax:, :]  # (mmax, batch)
-
-    # Values: magnitude in 1..w, sign in ±1
-    mag = rng.integers(1, w + 1, size=(mmax, batch_size), dtype=np.int16)  # 1..w
-    sgn = (rng.integers(0, 2, size=(mmax, batch_size), dtype=np.int16) * 2 - 1)  # ±1
-    vals = mag * sgn  # uniform over ±1..±w
-
-    # Scatter only the first m[j] entries in each column
-    rows = np.arange(mmax)[:, None]
-    keep = rows < m[None, :]  # (mmax, batch)
-
-    idx_kept = idx[keep]  # 1D
-    col_kept = np.broadcast_to(np.arange(batch_size), (mmax, batch_size))[keep]
-    val_kept = vals[keep]
-
-    # Pick dtype that won't overflow when added to sguess
-    if dtype is None:
-        # conservative: int16 unless sguess is already wider
-        dtype = np.int16 if sguess.dtype.itemsize <= 2 else sguess.dtype
-
-    noise = np.zeros((kappa, batch_size), dtype=dtype)
-    noise[idx_kept, col_kept] = val_kept.astype(dtype, copy=False)
-
-    return sguess + noise
 
 class BatchAttackInstance:
     def __init__(self, **kwargs):
@@ -275,7 +231,6 @@ class BatchAttackInstance:
                 s_corr = np.asarray(s_correct_guess, dtype=np.int64)
                 kappa = s_corr.size
 
-                # if correct:
                 msk_sublen = rng.integers(self.kappa//2, self.kappa, size=batch_size)
 
                 # build masks: shape (kappa, B)
@@ -288,8 +243,6 @@ class BatchAttackInstance:
                 sguess_1 = msk * s_corr[:, None] 
                 sguess_2 = -sguess_1 + s_corr[:, None]    
                 if not correct: #simulate a "slight" misguess 
-                    # sguess_1 = add_signed_uniform_noise(rng, sguess_1, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
-                    # sguess_2 = add_signed_uniform_noise(rng, sguess_2, kappa, batch_size, w=1, m_low=1, m_high=min(7,kappa//2))
                     sguess_1 += rng.integers(-1, 2, size=(kappa, batch_size), dtype=np.int16)
                     sguess_2 += rng.integers(-1, 2, size=(kappa, batch_size), dtype=np.int16)
 
@@ -301,9 +254,7 @@ class BatchAttackInstance:
                 tbatch1 = self._apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], tbatch1, dim=self.cd )
 
                 sec_proj2_cols = self.QinvCT@sguess_2 #t2
-                sec_proj2_cols = sec_proj2_cols[-self.cd:] #go to the projective sublattice
-                tbatch2 = copy(sec_proj2_cols) #we will still need sec_proj2_cols intact
-                tbatch2 = self._apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], tbatch2, dim=self.cd )
+                tbatch2 = self._apply_proj_submatrix_modulus( self.R[-self.cd:,-self.cd:], sec_proj2_cols, dim=self.cd )
                 
 
                 dbatch = tbatch1 - tbatch2 #delta betveen babai(t1) and babai(t2)
@@ -554,12 +505,12 @@ def run_single_instance(idx: int,
 
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
-    n_workers = 2  # set this >1 to parallelize across instances
+    n_workers = 1  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
     n_tars = 20 ## per-lattice instances #20
     n_trials = 1024*8 #8192*4          # per-lattice-instance trials in check_pairs_guess_dist. SHOULD be div'e by num_per_batch
     num_per_batch = 1024 #8192
-    inner_n_workers = 2   # threads for inner parallelism
+    inner_n_workers = 1   # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
@@ -567,9 +518,9 @@ def main():
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
     kappa = 20
-    cd = 64
+    cd = 50
     beta_max = 42
-    babai_succ_rate = 0.97
+    babai_succ_rate = 0.95
 
     os.makedirs(in_path, exist_ok=True)
 
@@ -756,22 +707,22 @@ def run_single_instance(idx: int,
 
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
-    n_workers = 2  # set this >1 to parallelize across instances
-    n_lats = 2  # number of lattices    #5
+    n_workers = 1  # set this >1 to parallelize across instances
+    n_lats = 1  # number of lattices    #5
     n_tars = 20 ## per-lattice instances #20
-    n_trials = 1024*8 #8192*4          # per-lattice-instance trials in check_pairs_guess_dist. SHOULD be div'e by num_per_batch
-    num_per_batch = 512 #8192
-    inner_n_workers = 2   # threads for inner parallelism
+    n_trials = 256*2 #8192*4          # per-lattice-instance trials in check_pairs_guess_dist. SHOULD be div'e by num_per_batch
+    num_per_batch = 256 #8192
+    inner_n_workers = 1   # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 125, 125, 4096
+    n, m, q = 144, 144, 4096
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
     kappa = 20
-    cd = 100
+    cd = 64
     beta_max = 42
-    babai_succ_rate = 1.01
+    babai_succ_rate = 0.5
 
     os.makedirs(in_path, exist_ok=True)
 
