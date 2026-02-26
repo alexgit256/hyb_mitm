@@ -18,7 +18,7 @@ from math import log,e, pi
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threadpoolctl import threadpool_limits
-THREADPOOL_LIMIT = 0 #set to 0 to allow max number of workers
+THREADPOOL_LIMIT = 2 #set to 0 to allow max number of workers
 from typing import Dict, Any, Optional
 import concurrent.futures
 from dataclasses import dataclass
@@ -126,7 +126,7 @@ class BatchAttackInstance:
         self.kappa = kwargs.get("kappa") #guessing dim
         self.cd = kwargs.get("cd") #CVP dim
 
-        assert self.m+self.n-(self.kappa+self.cd) >=0, f"Too large attack dimensions!"
+        assert self.m+self.n-self.kappa >=0, f"Too large attack dimensions!"
 
         #extract relevant sublattices
         H, C = kwargs.get("H"), kwargs.get("C")
@@ -181,7 +181,6 @@ class BatchAttackInstance:
                 "A": self.A,
                 "bse": self.bse,
                 "kappa": self.kappa,
-                "cd": self.cd,
                 "H": self.H,
                 "C": self.C,
             }
@@ -203,7 +202,6 @@ class BatchAttackInstance:
             A = D.get("A"),
             bse = D.get("bse"),
             kappa = D.get("kappa"),
-            cd = D.get("cd"),
             H = D.get("H"),
             C = D.get("C"),
         )
@@ -234,11 +232,12 @@ class BatchAttackInstance:
     #updates T inplace
         #updates T inplace
     def _apply_proj_submatrix_modulus(self,R,T,dim=None):
-        T = T[-self.cd:]
-        Tnew = copy(T)
-        U2 = proj_submatrix_modulus_blas( R, Tnew, dim=dim )
-        T += Tnew + self.R[-self.cd:,-self.cd:]@U2
-        return T
+        with threadpool_limits(limits=THREADPOOL_LIMIT):
+            T = T[-dim:]
+            Tnew = copy(T)
+            U2 = proj_submatrix_modulus_blas( R, Tnew, dim=dim )
+            T += Tnew + self.R[-self.cd:,-self.cd:]@U2
+            return T
                    
     def check_pairs_guess_dist(
             self, start=0, end=None, 
@@ -246,7 +245,7 @@ class BatchAttackInstance:
             n_trials=10, 
             n_workers=1, 
             num_per_batch=512,
-            which_exp={"admis","nrms"},
+            which_exp={"admis","nrms"},  #{"admis","nrms"}
             ):
         """
         Constructs correct (if correct==True) guesses s=s1-s2 for the MitM attack on LWE and checks if Babai_{H}(t+g2) == Babai(g1),
@@ -310,27 +309,6 @@ class BatchAttackInstance:
                 dbatch = tbatch1 - tbatch2 #delta betveen babai(t1) and babai(t2)
                 eucl = [ (tmp@tmp)**0.5 for tmp in dbatch.T ]
                 infnrm = [ np.max(np.abs(tmp)) for tmp in dbatch.T ]
-
-                # - - - Admissibility: check that babai(guess2 + err) = babai(guess2) + babai(err) - - -
-
-                # true_err = np.concatenate([e,-s[:-self.kappa]])[-self.cd:]
-                # tmp0batch = sec_proj2_cols + true_err[:,None]
-                # W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp0batch, dim=self.cd )
-                # tmp0batch = tmp0batch + self.R[-self.cd:,-self.cd:]@W
-
-                # tmp1batch = sec_proj2_cols
-                # W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], tmp1batch, dim=self.cd )
-                # tmp1batch = tmp1batch + self.R[-self.cd:,-self.cd:]@W
-
-                # true_err = np.atleast_2d(true_err).T.astype(np.float64)
-                # W = proj_submatrix_modulus_blas( self.R[-self.cd:,-self.cd:], true_err, dim=self.cd )
-                # tmp2 = true_err + self.R[-self.cd:,-self.cd:]@W
-
-                # is_adm = []
-                # tmp12 = tmp0batch - (tmp1batch+tmp2)
-                # for col in tmp12.T:
-                #     okay = all(np.isclose(col,0.0,atol=0.001))
-                #     is_adm.append(okay)
 
             return eucl, infnrm 
         
@@ -400,12 +378,12 @@ class BatchAttackInstance:
                     fut_kind = {}  # future -> ("dist"|"admis", tries)
 
                     # submit only what is requested
-                    if "admis" in which_exp:
+                    if "nrms" in which_exp:
                         for tries in range(n_trials_normalized):
                             fut = ex.submit(_trial_worker_dist, tries, num_per_batch, b, s_correct_guess, s, e)
                             fut_kind[fut] = ("dist", tries)
 
-                    if "nrms" in which_exp:
+                    if "admis" in which_exp:
                         for tries in range(n_trials_normalized):
                             fut = ex.submit(_trial_worker_admis, tries, num_per_batch, b, s_correct_guess, s, e)
                             fut_kind[fut] = ("admis", tries)
@@ -439,10 +417,10 @@ class BatchAttackInstance:
             if target_num%10==0:
                 print(f"{target_num} out of {end-start} targets done", flush=True)
             # is_adm_nums.append(is_adm_num)
-            is_adm_nums.append(is_adm_num)
+            is_adm_nums.append(is_adm_num if "admis" in which_exp else None)
             is_adm_num = 0
-            mindds.append(mindd)
-            minddinfs.append(minddinf)
+            mindds.append(mindd if "nrms" in which_exp else None)
+            minddinfs.append(minddinf if "nrms" in which_exp else None)
         print(mindds)
         print(minddinfs)
         return minddinfs, mindds, is_adm_nums
@@ -576,21 +554,21 @@ def run_single_instance(idx: int,
 
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
-    n_workers = 1  # set this >1 to parallelize across instances
-    n_lats = 1  # number of lattices    #5
-    n_tars = 5 ## per-lattice instances #20
+    n_workers = 2  # set this >1 to parallelize across instances
+    n_lats = 2  # number of lattices    #5
+    n_tars = 20 ## per-lattice instances #20
     n_trials = 1024*8 #8192*4          # per-lattice-instance trials in check_pairs_guess_dist. SHOULD be div'e by num_per_batch
-    num_per_batch = 256 #8192
+    num_per_batch = 1024 #8192
     inner_n_workers = 2   # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 100, 100, 4096
+    n, m, q = 125, 125, 4096
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
     kappa = 20
-    cd = 50
-    beta_max = 30
+    cd = 64
+    beta_max = 42
     babai_succ_rate = 0.97
 
     os.makedirs(in_path, exist_ok=True)
@@ -750,7 +728,7 @@ def run_single_instance(idx: int,
     print(f"incorrect adm: {is_adm_num_incorrect}")
 
     return {
-        "version": "0.0.1",  #file format version
+        "version": "0.0.2",  #file format version
         "idx": idx,
         "seed": seed,
         'n': n,
@@ -778,22 +756,22 @@ def run_single_instance(idx: int,
 
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
-    n_workers = 1  # set this >1 to parallelize across instances
-    n_lats = 1  # number of lattices    #5
-    n_tars = 5 ## per-lattice instances #20
+    n_workers = 2  # set this >1 to parallelize across instances
+    n_lats = 2  # number of lattices    #5
+    n_tars = 20 ## per-lattice instances #20
     n_trials = 1024*8 #8192*4          # per-lattice-instance trials in check_pairs_guess_dist. SHOULD be div'e by num_per_batch
-    num_per_batch = 256 #8192
+    num_per_batch = 512 #8192
     inner_n_workers = 2   # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 100, 100, 4096
+    n, m, q = 125, 125, 4096
     seed_base = 0
     dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
     kappa = 20
-    cd = 50
+    cd = 100
     beta_max = 42
-    babai_succ_rate = 0.97
+    babai_succ_rate = 1.01
 
     os.makedirs(in_path, exist_ok=True)
 
