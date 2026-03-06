@@ -18,7 +18,7 @@ from math import log,e, pi
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threadpoolctl import threadpool_limits
-THREADPOOL_LIMIT = 1 #set to 0 to allow max number of workers
+THREADPOOL_LIMIT = 2 #set to 0 to allow max number of workers
 from typing import Dict, Any, Optional
 import concurrent.futures
 from dataclasses import dataclass
@@ -113,7 +113,7 @@ class BatchAttackInstance:
             self.Qinv = Qinv
             self.QinvCT = QinvCT
 
-    def reduce(self,beta, bkz_tours, bkz_size=64, lll_size = 64, delta = 0.99, cores=1, debug= False,
+    def reduce(self,beta, bkz_tours, bkz_size=64, lll_size = 64, delta = 0.99, cores=THREADPOOL_LIMIT, debug= False,
         verbose= True, logfile= None, anim= None, depth = 4,
         use_seysen = False, **kwds):
         if self.LR is None:
@@ -477,208 +477,6 @@ def run_single_instance(idx: int,
     print(f"incorrect adm: {is_adm_num_incorrect}")
 
     return {
-        "version": "0.0.1",  #file format version
-        "idx": idx,
-        "seed": seed,
-        'n': n,
-        'm': m,
-        'q': q,
-        'beta_max': beta_max,
-        'kappa': kappa,
-        'cd': cd,
-        'dists': {
-            "dist_s": dist_s, "dist_param_s": dist_param_s,
-            "dist_e": dist_e, "dist_param_e": dist_param_e,
-        },
-        'n_trials': n_trials,
-        "filename": filename,
-        "is_adm_num_correct": is_adm_num_correct,
-        "is_adm_num_incorrect": is_adm_num_incorrect,
-        "succnum": succnum,
-        "itnum": itnum,
-        "infdiff_correct": infdiff_correct,
-        "infdiff_incorrect": infdiff_incorrect,
-        "mindds_correct": mindds_correct,
-        "mindds_incorrect": mindds_incorrect,
-        "loaded": loaded,
-    }
-
-def main():
-    # outer parallelism: number of independent BatchAttackInstance runs
-    n_workers = 1  # set this >1 to parallelize across instances
-    n_lats = 2  # number of lattices    #5
-    n_tars = 20 ## per-lattice instances #20
-    n_trials = 1024*8 #8192*4          # per-lattice-instance trials in check_pairs_guess_dist. SHOULD be div'e by num_per_batch
-    num_per_batch = 1024 #8192
-    inner_n_workers = 1   # threads for inner parallelism
-
-    assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
-
-    n, m, q = 125, 125, 4096
-    seed_base = 0
-    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
-    kappa = 20
-    cd = 50
-    beta_max = 42
-    babai_succ_rate = 0.95
-
-    os.makedirs(in_path, exist_ok=True)
-
-    results = []
-    # use processes for independent instances (CPU-bound)
-    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers) as executor:
-        futures = {
-            executor.submit(
-                run_single_instance,
-                idx,
-                n, m, q, n_tars,
-                dist_s, dist_param_s,
-                dist_e, dist_param_e,
-                kappa, cd,
-                beta_max,
-                seed_base,
-                n_trials,
-                num_per_batch,
-                n_tars,
-                inner_n_workers,
-                babai_succ_rate,
-            ): idx
-            for idx in range(n_lats)
-        }
-
-        try:
-            for fut in concurrent.futures.as_completed(futures):
-                idx = futures[fut]
-                try:
-                    res = fut.result()
-                except Exception as e:
-                    print(f"[main] instance {idx} raised {e!r}")
-                    res = {"idx": idx, "error": repr(e)}
-                    raise e
-                results.append(res)
-        except KeyboardInterrupt:
-            print("\n[main] Caught KeyboardInterrupt, cancelling workers...")
-            # cancel all pending futures
-            for f in futures:
-                f.cancel()
-            # tell the executor to stop without waiting for the workers
-            executor.shutdown(wait=False, cancel_futures=True)
-            # re-raise so outer handler can catch it
-            raise
-
-    # compact summary
-    for r in results:
-        if "error" in r:
-            print(f"instance {r['idx']} ERROR: {r['error']}")
-        else:
-            print(f"instance {r['idx']} (seed {r['seed']}, file {r['filename']}, loaded={r['loaded']})")
-            print(f"  check_correct_guess: ({r['succnum']}, {r['itnum']})")
-            print(f"  infdiff_correct  (len {len(r['infdiff_correct'])}): {r['infdiff_correct']}")
-            print(f"  infdiff_incorrect(len {len(r['infdiff_incorrect'])}): {r['infdiff_incorrect']}")
-
-    return results
-
-
-# NEW: worker to run one complete BatchAttackInstance experiment in a separate process
-def run_single_instance(idx: int,
-                        n: int, m: int, q: int, n_tars: int,
-                        dist_s: str, dist_param_s: int,
-                        dist_e: str, dist_param_e: int,
-                        kappa: int, cd: int,
-                        beta_max: int,
-                        seed_base: int,
-                        n_trials: int,
-                        num_per_batch: int,
-                        ntar: int,
-                        inner_n_workers: int,
-                        babai_succ_rate=0.95) -> Dict[str, Any]:
-    """
-    One worker:
-      - seeds RNG
-      - loads or creates + reduces a BatchAttackInstance
-      - runs check_correct_guess and check_pairs_guess_dist (correct/incorrect)
-      - returns summary dict
-    """
-    # per-instance seed (for reproducibility and diversity)
-    seed = seed_base + idx
-    random.seed(seed)
-    np.random.seed(seed)
-
-    # filename unique per instance
-    filename = f"lweinst_{n}_{m}_{q}_{dist_s}_{dist_param_s:.4f}_{dist_e}_{dist_param_e:.4f}_{kappa}_inst{idx}.pkl"
-    fullpath = os.path.join(in_path, filename)
-
-    # load or create instance
-    try:
-        lwe_instance = BatchAttackInstance.load_from_disc(fullpath)
-        lwe_instance.cd = cd #technically, this should not be a field?
-        loaded = True
-        print(f"[inst {idx}] loaded from {fullpath}")
-    except FileNotFoundError:
-        loaded = False
-        print(f"[inst {idx}] creating new instance (will save to {fullpath})")
-        lwe_instance = BatchAttackInstance(
-            n=n, m=m, q=q, n_tars=n_tars,
-            dist_s=dist_s, dist_param_s=dist_param_s,
-            dist_e=dist_e, dist_param_e=dist_param_e,
-            kappa=kappa, cd=cd, ntar=ntar
-        )
-
-        if babai_succ_rate:
-            # vefifies
-            nrms = []
-            for _, s, e in lwe_instance.bse:
-                v = np.concatenate([s,e])
-                nrms.append( v@v )
-            #estimation of projected length (95th percentile)
-            nrmper = np.percentile( nrms, 0.95 ) * ( lwe_instance.cd / (n+m) )**2
-
-        for beta in list(range(40, beta_max+1, 1)):
-            t0 = perf_counter()
-            lwe_instance.reduce(beta=beta, bkz_tours=2, 
-                                cores=inner_n_workers, #, depth=4,
-                                start=0, end=None)
-            print(f"[inst {idx}] bkz-{beta} done in {perf_counter()-t0:.2f}s")
-
-            if babai_succ_rate:
-                G = GSO.Mat( lwe_instance.H, float_type="dd" )
-                G.update_gso()
-
-                succ, iters = lwe_instance.check_correct_guess()
-                if succ/iters >= babai_succ_rate:
-                    print(f"Stopped lattice reduction [{idx}] at {beta}: {succ/iters} >= {babai_succ_rate}")
-                    break
-                else:
-                    print(f"Continuing reduction [{idx}]: {beta}: {succ/iters} < {babai_succ_rate}")
-            
-
-        # save reduced instance to disk so future runs can reuse it
-        os.makedirs(in_path, exist_ok=True)
-        lwe_instance.dump_on_disc(fullpath)
-        print(f"[inst {idx}] dumped to {fullpath}")
-
-    finally:
-        lwe_instance = BatchAttackInstance.load_from_disc(fullpath)
-        lwe_instance.cd = cd #technically, this should not be a field?
-        loaded = True
-        print(f"[inst {idx}] loaded from {fullpath}")
-
-
-    # run experiments
-    print(f"[inst {idx}] check_correct_guess()")
-    succnum, itnum = lwe_instance.check_correct_guess()
-    print(f"[inst {idx}] check_correct_guess -> ({succnum}, {itnum})")
-
-    print(f"[inst {idx}] check_pairs_guess_dist(correct=False)")
-    infdiff_incorrect, mindds_incorrect, is_adm_num_incorrect = lwe_instance.check_pairs_guess_dist(n_trials=n_trials, n_workers=inner_n_workers, num_per_batch=num_per_batch, correct=False)
-
-    print(f"[inst {idx}] check_pairs_guess_dist(correct=True)")
-    infdiff_correct, mindds_correct, is_adm_num_correct       = lwe_instance.check_pairs_guess_dist(n_trials=n_trials, n_workers=inner_n_workers, num_per_batch=num_per_batch, correct=True)
-    
-    print(f"correct adm: {is_adm_num_correct}")
-    print(f"incorrect adm: {is_adm_num_incorrect}")
-
-    return {
         "version": "0.0.2",  #file format version
         "idx": idx,
         "seed": seed,
@@ -707,22 +505,22 @@ def run_single_instance(idx: int,
 
 def main():
     # outer parallelism: number of independent BatchAttackInstance runs
-    n_workers = 1  # set this >1 to parallelize across instances
-    n_lats = 1  # number of lattices    #5
+    n_workers = 2  # set this >1 to parallelize across instances
+    n_lats = 2  # number of lattices    #5
     n_tars = 20 ## per-lattice instances #20
-    n_trials = 256*2 #8192*4          # per-lattice-instance trials in check_pairs_guess_dist. SHOULD be div'e by num_per_batch
-    num_per_batch = 256 #8192
-    inner_n_workers = 1   # threads for inner parallelism
+    n_trials = 256*10 #256*4          # per-lattice-instance trials in check_pairs_guess_dist. SHOULD be div'e by num_per_batch
+    num_per_batch = 256 #256 #do not go above 256
+    inner_n_workers = 2   # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 144, 144, 4096
+    n, m, q = 110, 110, 4096
     seed_base = 0
-    dist_s, dist_param_s, dist_e, dist_param_e = "ternary_sparse", 28, "binomial", 2
-    kappa = 20
+    dist_s, dist_param_s, dist_e, dist_param_e = "binomial", 2, "gaussian", 1.5
+    kappa = 25
     cd = 64
     beta_max = 42
-    babai_succ_rate = 0.5
+    babai_succ_rate = 1.01
 
     os.makedirs(in_path, exist_ok=True)
 

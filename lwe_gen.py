@@ -2,157 +2,194 @@ from random import randrange, choices, shuffle, seed as set_seed
 import numpy as np
 import json
 
-# def generateLWEInstance(n):
-#   A,s,e,q = kyberGen(n)
-  
-#   b = (s.dot(A) + e) % q
+from math import ceil
 
-#   return A,b,q,s,e
+def binomial_dist(eta, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+    # centered binomial with parameter eta:
+    # sum of 2*eta fair bits minus eta
+    return rng.binomial(2 * eta, 0.5) - eta
 
-def generateLWEInstances(n,m,q,dist_s,dist_param_s,dist_e=None,dist_param_e=None,ntar=10):
+
+def binomial_vec(n, eta, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+    return rng.binomial(2 * eta, 0.5, size=n) - eta
+
+
+def ternary_vec(n, w, rng=None):
+    """
+    For 0 <= w <= 1/2, each coordinate is:
+      1 with prob w,
+     -1 with prob w,
+      0 with prob 1-2w.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    if not (0 <= w <= 0.5):
+        raise ValueError("ternary parameter w must satisfy 0 <= w <= 1/2")
+    return rng.choice([1, -1, 0], size=n, p=[w, w, 1 - 2 * w])
+
+
+def ternary_sparse_vec(n, k, rng=None):
+    """
+    Exactly k nonzero entries, each independently ±1.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    if not (0 <= k <= n):
+        raise ValueError("ternary_sparse parameter k must satisfy 0 <= k <= n")
+    v = np.zeros(n, dtype=int)
+    idx = rng.choice(n, size=k, replace=False)
+    v[idx] = rng.choice([-1, 1], size=k)
+    return v
+
+
+def uniform_vec(n, a, b, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+    return rng.integers(a, b, size=n)
+
+
+def continuous_gaussian_vec(n, sigma, rng=None):
+    """
+    Samples from N(0, sigma^2)^n, returns float vector.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    if sigma <= 0:
+        raise ValueError("continuous Gaussian sigma must be > 0")
+    return rng.normal(loc=0.0, scale=sigma, size=n)
+
+
+def discrete_gaussian_vec(n, sigma, rng=None, tailcut=8):
+    """
+    Samples from a truncated discrete Gaussian over Z:
+        P(X = k) proportional to exp(-k^2 / (2 sigma^2))
+    for k in [-B, ..., B], where B = ceil(tailcut * sigma).
+
+    This is not the infinite-support exact sampler, but for tailcut=8
+    the truncation error is tiny in most practical cases.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    if sigma <= 0:
+        raise ValueError("discrete Gaussian sigma must be > 0")
+
+    B = max(1, ceil(tailcut * sigma))
+    xs = np.arange(-B, B + 1)
+    ws = np.exp(-(xs.astype(np.float64) ** 2) / (2.0 * sigma * sigma))
+    ws /= ws.sum()
+    return rng.choice(xs, size=n, p=ws)
+
+
+def _sample_vec(dist, dim, param, rng=None):
+    """
+    dist: string
+    param: distribution parameter
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    key = dist.lower() if isinstance(dist, str) else dist
+
+    if key == "binomial":
+        return binomial_vec(dim, param, rng=rng)
+
+    if key == "ternary":
+        return ternary_vec(dim, param, rng=rng)
+
+    if key == "ternary_sparse":
+        return ternary_sparse_vec(dim, param, rng=rng)
+
+    if key in ("gaussian", "continuous_gaussian", "normal"):
+        return continuous_gaussian_vec(dim, param, rng=rng)
+
+    if key in ("discrete_gaussian", "dgauss"):
+        return discrete_gaussian_vec(dim, param, rng=rng)
+
+    raise NotImplementedError(f"Distribution {dist!r} not implemented.")
+
+
+def generateLWEInstances(
+    n,
+    m,
+    q,
+    dist_s,
+    dist_param_s,
+    dist_e=None,
+    dist_param_e=None,
+    ntar=10,
+    seed=None,
+):
+    """
+    Returns A, q, bse where:
+      A   : (n x m) matrix over Z_q
+      bse : list of tuples (b, s, e)
+            with b = s A + e mod q
+
+    Notes:
+    - s has length n
+    - e has length m
+    - if dist_e/param_e omitted, uses same as secret
+    - Gaussian secret/error may be float (continuous Gaussian) or int (discrete Gaussian)
+    """
     if dist_e is None:
-       dist_e = dist_s
+        dist_e = dist_s
     if dist_param_e is None:
-       dist_param_e = dist_param_s
+        dist_param_e = dist_param_s
 
-    A = []
-    for _ in range(n):
-       a = np.array([ randrange(q) for _ in range(m) ])
-       A.append(a)
-    A = np.array(A)
+    rng = np.random.default_rng(seed)
+
+    A = rng.integers(0, q, size=(n, m), dtype=np.int64)
 
     bse = []
-
     for _ in range(ntar):
-        set_seed(randrange(2**31))
-        match str(dist_s):
-            case "binomial":
-                s = binomial_vec(n, dist_param_s)
-            case "ternary":
-                s = ternary_vec(n, dist_param_s)
-            case "ternary_sparse":
-                s = [2*randrange(2)-1 for j in range(dist_param_s)] + (n-dist_param_s)*[0]
-                shuffle(s)
-                s = np.array(s)
-            case _:
-                raise NotImplementedError("Distribution %s not implemented." % dist_s)
-           
-        for _ in range(ntar):
-          match str(dist_e):
-              case "binomial":
-                  e = binomial_vec(m, dist_param_e)  
-              case "ternary":
-                  e = ternary_vec(m, dist_param_e)
-              case "ternary_sparse":
-                  e = [2*randrange(2)-1 for j in range(dist_param_e)] + (m-dist_param_e)*[0]
-                  shuffle(e)
-              case _:
-                  raise NotImplementedError("Distribution %s not implemented." % dist_e)
-           
-        b = (s.dot(A) + e) % q
+        s = _sample_vec(dist_s, n, dist_param_s, rng=rng)
+        e = _sample_vec(dist_e, m, dist_param_e, rng=rng)
+        b = (s @ A + e) % q
+        bse.append((b, s, e))
 
-        bse.append((b,s,e))
-    
-    return A,q,bse
+    return A, q, bse
 
 
-"""
-  Returns an integer following the binomial distribution with parameter eta.
-"""
-def binomial_dist(eta):
-  s = 0
-  for i in range(eta):
-    s += randrange(2)
-  return s
-
-"""
-  Returns an n-dimensional vector,
-  whose coordinates follow a centered binomial distribution
-  with parameter eta.
-"""
-def binomial_vec(n, eta):
-  v = np.array([0]*n)
-  for i in range(n):
-    v[i] = binomial_dist(2*eta) - eta
-  return v
-
-"""
-    For 0 <= w <= 1/2, returns an n-dimensional vector where each coordinates is
-        1 with probability w,
-        -1 with probability w,
-        0 with probabiltiy 1-2*w.
-"""
-def ternary_vec(n,w):
-   population = [1,-1,0]
-   weights = [w,w,1-2*w]
-   return np.array(choices(population,weights, k=n))
-
-"""
-  Returns an n-dimensional vector,
-  whose coordinates follow the uniform distrbution
-  on [a,...,b-1].
-"""
-def uniform_vec(n, a, b):
-  return np.array([randrange(a,b) for _ in range(n)])
-
-"""
-  Returns the rotation matrix of poly, i.e.,
-  the matrix consisting of the coefficient vectors of
-    poly, X * poly, X^2 * poly, ..., X^(deg(poly)-1) * poly
-  modulo X^n-1.
-  If cyclotomic = True, then reduction mod X^n+1 is applied, instead of X^n-1.
-"""
 def rotMatrix(poly, cyclotomic=False):
-  n = len(poly)
-  A = np.array( [[0]*n for _ in range(n)] )
-  
-  for i in range(n):
-    for j in range(n):
-      c = 1
-      if cyclotomic and j < i:
-        c = -1
+    n = len(poly)
+    A = np.array([[0] * n for _ in range(n)])
 
-      A[i][j] = c * poly[(j-i)%n]
-      
-  return A
+    for i in range(n):
+        for j in range(n):
+            c = 1
+            if cyclotomic and j < i:
+                c = -1
+            A[i][j] = c * poly[(j - i) % n]
 
-"""
-  Given a list of polynomials poly = [p_1, ...,p_n],
-  this function returns an rows*cols matrix,
-  consisting of the rotation matrices of p_1, ..., p_n.
-"""
-def module( polys, rows, cols ):
-  if rows*cols != len(polys):
-    raise ValueError("len(polys) has to equal rows*cols.")
-  
-  n = len(polys[0])
-  for poly in polys:
-    if len(poly) != n:
-      raise ValueError("polys must not contain polynomials of varying degrees.")
-  
-  blocks = []
-  
-  for i in range(rows):
-    row = []
-    for j in range(cols):
-      row.append( rotMatrix(polys[i*cols+j], cyclotomic=True) )
-    blocks.append(row)
-  
-  return np.block( blocks )
-  
-"""
-  Returns A,s,e, where
-  A is a random (n x m)-matrix mod q and
-  the coordinates of s and e follow a centered binomial distribution with parameter eta.
-"""
-def binomialLWEGen(n,m,q,eta):
-  A = np.array( [[0]*m for _ in range(n)] )
-  
-  for i in range(n):
-    for j in range(m):
-      A[i][j] = randrange(q)
-  
-  s = binomial_vec(n, eta)
-  e = binomial_vec(m, eta)
-  
-  return A,s,e
+    return A
+
+
+def module(polys, rows, cols):
+    if rows * cols != len(polys):
+        raise ValueError("len(polys) has to equal rows*cols.")
+
+    n = len(polys[0])
+    for poly in polys:
+        if len(poly) != n:
+            raise ValueError("polys must not contain polynomials of varying degrees.")
+
+    blocks = []
+    for i in range(rows):
+        row = []
+        for j in range(cols):
+            row.append(rotMatrix(polys[i * cols + j], cyclotomic=True))
+        blocks.append(row)
+
+    return np.block(blocks)
+
+
+def binomialLWEGen(n, m, q, eta, seed=None):
+    rng = np.random.default_rng(seed)
+    A = rng.integers(0, q, size=(n, m), dtype=np.int64)
+    s = binomial_vec(n, eta, rng=rng)
+    e = binomial_vec(m, eta, rng=rng)
+    return A, s, e

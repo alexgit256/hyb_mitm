@@ -8,6 +8,7 @@ import time, os
 import tempfile
 import subprocess
 from random import randrange
+from threadpoolctl import threadpool_limits
 
 from precision_wrapper import make_gso_mat
 from copy import copy
@@ -78,41 +79,10 @@ def flatter_interface(fpylllB, *, flatter_bin="flatter", tmpdir=None, keep_files
 
         return B
 
-# def flatter_interface( fpylllB ):
-#     #import os
-#     basis = '[' + fpylllB.__str__() + ']'
-#     #print(basis)
-#     seed = randrange(2**32)
-#     filename = f"lat{seed}.txt"
-#     filename_out = f"redlat{seed}.txt"
-#     with open(filename, 'w') as file:
-#         file.write( "["+fpylllB.__str__()+"]" )
-    
-#     out = os.system( "flatter " + filename + " > " + filename_out )
-#     time.sleep(float(0.05))
-#     os.remove( filename )
-    
-#     B = IntegerMatrix.from_file( filename_out )
-#     os.remove( filename_out )
-#     return B
 
 class LatticeReduction:
     def __init__(self,B):
         self.B = flatter_interface( IntegerMatrix.from_matrix( B ) )
-
-    # def LLL(self, B, lll_size  = 64, delta: float = 0.99, start=0, end=None, cores=1,use_seysen  = True):
-    #     if end is None or end==-1:
-    #         end = self.B.nrows
-
-    #     tprof = TimeProfile(use_seysen)
-        
-    #     B_trunc = IntegerMatrix.from_matrix( [self.B[i] for i in range(start,end)] )
-    #     B_trunc = np.array([list(tmp) for tmp in B_trunc]).transpose()
-    #     B_trunc = np.ascontiguousarray(B_trunc, dtype=np.int64)
-    #     U = np.identity(B_trunc.shape[1], dtype=np.int64)
-    #     U_seysen = np.identity(B_trunc.shape[1], dtype=np.int64)
-    #     lll_reduce(B_trunc, U, U_seysen, lll_size, delta, depth=0, tprof=tprof,tracers={}, debug=False, use_seysen=use_seysen )
-    #     self.B = IntegerMatrix.from_matrix( [self.B[i] for i in range(start)] + [b for b in B_trunc] + [self.B[i] for i in range(end,self.B.nrows)] )
 
     def LLL(self, B=None, lll_size=64, delta: float = 0.99,
         start=0, end=None, cores=1, use_seysen=True):
@@ -140,7 +110,6 @@ class LatticeReduction:
         reduced_rows = B_np.T  # (k, ncols)
 
         # --- elementwise assignment ---
-        # (start+i, j) addressing is supported
         for i in range(end - start):
             row = reduced_rows[i]
             bi = start + i
@@ -181,9 +150,10 @@ class LatticeReduction:
             B_trunc = bkz.M.B
 
         elif beta<65 and use_blaster:
-            B_trunc= reduce(np.array([list(tmp) for tmp in B_trunc]).transpose(), lll_size=lll_size, delta=delta, cores=cores, debug=debug,
-            verbose=verbose, logfile=logfile, anim=None, depth=depth,
-            use_seysen=use_seysen, bkz_tours=bkz_tours, beta=beta)[1].transpose()
+            with threadpool_limits(limits=cores):
+                B_trunc= reduce(np.array([list(tmp) for tmp in B_trunc]).transpose(), lll_size=lll_size, delta=delta, cores=cores, debug=debug,
+                verbose=verbose, logfile=logfile, anim=None, depth=depth,
+                use_seysen=use_seysen, bkz_tours=bkz_tours, beta=beta)[1].transpose()
         else:
             if not G6K_IMPORTED:
                 raise RuntimeError("Cannot go beyond dim 64: g6k is not installed.")
