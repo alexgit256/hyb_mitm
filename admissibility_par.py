@@ -1,5 +1,3 @@
-USE_MASK = True
-
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
 import numpy as np
@@ -11,7 +9,7 @@ import time, random
 from time import perf_counter
 from random import randrange, shuffle
 import pickle
-import sys, os  # NEW
+import sys, os 
 
 from utils import *
 from math import log,e, pi
@@ -26,8 +24,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.animation import ArtistAnimation, PillowWriter
 
 import traceback
 
@@ -274,7 +270,7 @@ class BatchAttackInstance:
                 sguess = rng.integers(-1, 2, size=(kappa,batch_size), dtype=np.int16)
                 sec_proj_cols = self.QinvCT@sguess #t2
                 sec_proj_cols = sec_proj_cols[-self.cd:] #go to the projective sublattice
-                tbatch = copy(sec_proj_cols) #we will still need sec_proj2_cols intact
+                # tbatch = copy(sec_proj_cols) #we will still need sec_proj2_cols intact
 
                 # - - - Admissibility: check that babai(guess2 + err) = babai(guess2) + babai(err) - - -
 
@@ -367,7 +363,7 @@ class BatchAttackInstance:
             print(f"is_adm_num: {is_adm_num} | {n_trials_normalized*num_per_batch}")
             if target_num%10==0:
                 print(f"{target_num} out of {end-start} targets done", flush=True)
-            # is_adm_nums.append(is_adm_num)
+            
             is_adm_nums.append(is_adm_num if "admis" in which_exp else None)
             is_adm_num = 0
             mindds.append(mindd if "nrms" in which_exp else None)
