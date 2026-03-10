@@ -246,7 +246,6 @@ def find_vect_in_list(v,l,tolerance=1.0e-6):
     mindiff = float("inf")
     # print(f"debug v: {v}")
     for i in range(len(l)):
-        # print(f"debug ti: {l[i]}")
         tmp = np.abs( np.array(v)-np.array(l[i]) )
         # print(f"tmp: {tmp}")
         mindiff = min( mindiff, max(tmp) )

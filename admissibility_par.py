@@ -197,7 +197,8 @@ class BatchAttackInstance:
             n_trials=10, 
             n_workers=1, 
             num_per_batch=512,
-            which_exp={"admis","nrms"},  #{"admis","nrms"}
+            
+            ={"admis","nrms"},  #{"admis","nrms"}
             ):
         """
         Constructs correct (if correct==True) guesses s=s1-s2 for the MitM attack on LWE and checks if Babai_{H}(t+g2) == Babai(g1),
@@ -310,13 +311,13 @@ class BatchAttackInstance:
                 for tries in range(n_trials_normalized):
                     if tries != 0 and tries % 10 == 0:
                         print(f"{tries} out of {n_trials_normalized} done")
-                    if "admis" in which_exp:
+                    if "nrms" in which_exp:
                         eucl, infnrm = _trial_worker_dist(tries, num_per_batch, b, s_correct_guess,s,e)
                         if np.min(eucl) < mindd:
                             mindd = np.min(eucl)
                         if np.min(infnrm) < minddinf:  #TODO: see if admissibility == minimizing the norm
                             minddinf = np.min(infnrm)
-                    if "nrms" in which_exp:
+                    if "admis" in which_exp:
                         is_adm = _trial_worker_admis(tries, num_per_batch, b, s_correct_guess,s,e)
                         is_adm_num+=is_adm
             else:
