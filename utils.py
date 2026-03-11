@@ -18,6 +18,22 @@ from size_reduction import nearest_plane
 
 DTYPE = "double"
 
+from datetime import datetime
+
+def get_current_datetime():
+    """
+    Returns the current local date and time as a formatted string.
+    """
+    try:
+        # Get current local date and time
+        now = datetime.now()
+        
+        # Format: YYYY-MM-DD HH:MM:SS
+        formatted = now.strftime("%Y-%m-%d_%H_%M_%S")
+        return formatted
+    except Exception as e:
+        return f"Error getting date and time: {e}"
+
 
 def gsomat_copy(M):
     n,m,int_type,float_type = M.B.nrows,M.B.ncols,M.int_type,M.float_type

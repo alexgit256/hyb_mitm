@@ -159,7 +159,7 @@ class BatchAttackInstance:
         )
         
     #checks if, after guessing self.kappa coordinates, babai solves instances [start:end]
-    def check_correct_guess(self, start=0, end=None):
+    def check_correct_guesses(self, start=0, end=None):
         if end is None:
             end = len(self.bse)
         G = GSO.Mat( IntegerMatrix.from_matrix( self.H ), float_type="mpfr" )
@@ -196,9 +196,8 @@ class BatchAttackInstance:
             correct=True, 
             n_trials=10, 
             n_workers=1, 
-            num_per_batch=512,
-            
-            ={"admis","nrms"},  #{"admis","nrms"}
+            num_per_batch=512,           
+            which_exp={"admis","nrms"},  #{"admis","nrms"}
             ):
         """
         Constructs correct (if correct==True) guesses s=s1-s2 for the MitM attack on LWE and checks if Babai_{H}(t+g2) == Babai(g1),
@@ -439,7 +438,7 @@ def run_single_instance(idx: int,
                 G = GSO.Mat( lwe_instance.H, float_type="dd" )
                 G.update_gso()
 
-                succ, iters = lwe_instance.check_correct_guess()
+                succ, iters = lwe_instance.check_correct_guesses()
                 if succ/iters >= babai_succ_rate:
                     print(f"Stopped lattice reduction [{idx}] at {beta}: {succ/iters} >= {babai_succ_rate}")
                     break
@@ -452,16 +451,15 @@ def run_single_instance(idx: int,
         lwe_instance.dump_on_disc(fullpath)
         print(f"[inst {idx}] dumped to {fullpath}")
 
-    finally:
-        lwe_instance = BatchAttackInstance.load_from_disc(fullpath)
-        lwe_instance.cd = cd #technically, this should not be a field?
-        loaded = True
-        print(f"[inst {idx}] loaded from {fullpath}")
+    lwe_instance = BatchAttackInstance.load_from_disc(fullpath)
+    lwe_instance.cd = cd #technically, this should not be a field?
+    loaded = True
+    print(f"[inst {idx}] loaded from {fullpath}")
 
 
     # run experiments
-    print(f"[inst {idx}] check_correct_guess()")
-    succnum, itnum = lwe_instance.check_correct_guess()
+    print(f"[inst {idx}] check_correct_guesses()")
+    succnum, itnum = lwe_instance.check_correct_guesses()
     print(f"[inst {idx}] check_correct_guess -> ({succnum}, {itnum})")
 
     print(f"[inst {idx}] check_pairs_guess_dist(correct=False)")
