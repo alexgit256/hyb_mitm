@@ -63,15 +63,15 @@ def check_pairs_guess_dist(
         end = len(BAI.bse)
 
     mindds, minddinfs = [], []
-    # Helper that performs a single trial for current (b, s_correct_guess)
-    def _trial_worker_dist(trie_idx, batch_size, b, s_correct_guess):
+    # Helper that performs a single trial for current (b, s[-BAI.kappa:])
+    def _trial_worker_dist(trie_idx, batch_size, b, s):
         with threadpool_limits(limits=THREADPOOL_LIMIT):
             # create a local RNG to avoid shared-state race
             seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
             rng = np.random.default_rng(seed)
 
             # ensure numpy arrays for elementwise ops
-            s_corr = np.asarray(s_correct_guess, dtype=np.int64)
+            s_corr = np.asarray(s[-BAI.kappa:], dtype=np.int64)
             kappa = s_corr.size
 
             msk_sublen = rng.integers(BAI.kappa//2, BAI.kappa, size=batch_size)
@@ -111,7 +111,6 @@ def check_pairs_guess_dist(
     for b, s, e in BAI.bse[start:end]:
         mindd = float('inf')
         minddinf = float('inf')
-        s_correct_guess = s[-BAI.kappa:]
 
         n_trials_normalized = (n_trials)//num_per_batch #num_per_batch used to be one
         if n_workers is None or n_workers <= 1:
@@ -119,7 +118,7 @@ def check_pairs_guess_dist(
             for tries in range(n_trials_normalized):
                 if tries != 0 and tries % 10 == 0:
                     print(f"{tries} out of {n_trials_normalized} done")
-                eucl, infnrm = _trial_worker_dist(tries, num_per_batch, b, s_correct_guess,s,e)
+                eucl, infnrm = _trial_worker_dist(tries, num_per_batch, b, s[-BAI.kappa:],s,e)
                 if np.min(eucl) < mindd:
                     mindd = np.min(eucl)
                 if np.min(infnrm) < minddinf:  #TODO: see if admissibility == minimizing the norm
@@ -131,7 +130,7 @@ def check_pairs_guess_dist(
 
                 # submit only what is requested
                 for tries in range(n_trials_normalized):
-                    fut = ex.submit(_trial_worker_dist, tries, num_per_batch, b, s_correct_guess)
+                    fut = ex.submit(_trial_worker_dist, tries, num_per_batch, b, s[-BAI.kappa:])
                     fut_kind[fut] = (tries)
 
                 # collect

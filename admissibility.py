@@ -65,14 +65,24 @@ def check_pairs_guess_admis(
         end = len(BAI.bse)
     
     # Helper that performs a single trial for current (b, s_correct_guess)
-    def _trial_worker_admis(trie_idx, batch_size,s,e):
+    def _trial_worker_admis(trie_idx, batch_size,b,s,e):
         with threadpool_limits(limits=THREADPOOL_LIMIT):
             # create a local RNG to avoid shared-state race
             seed = (os.getpid() ^ trie_idx ^ int(time.time_ns()))
             rng = np.random.default_rng(seed)
             kappa = BAI.kappa
+            
+            if not correct:  
+                sguess = rng.integers(-1, 2, size=(kappa,batch_size), dtype=np.int16)
+            else:
+                s_corr = np.asarray(s[-BAI.kappa:], dtype=np.int64)
+                msk_sublen = rng.integers(BAI.kappa//2, BAI.kappa, size=batch_size)
+                msk = np.zeros((kappa, batch_size), dtype=np.int8)
+                for j in range(batch_size):
+                    msk[:msk_sublen[j], j] = 1
+                    rng.shuffle(msk[:, j])
+                sguess = msk * s_corr[:, None]
 
-            sguess = rng.integers(-1, 2, size=(kappa,batch_size), dtype=np.int16)
             sec_proj_cols = BAI.QinvCT@sguess #t2
             sec_proj_cols = sec_proj_cols[-BAI.cd:] #go to the projective sublattice
 
@@ -103,45 +113,47 @@ def check_pairs_guess_admis(
     is_adm_num = 0
     is_adm_nums = []
     target_num = 0
-    for b, s, e in BAI.bse[start:end]:
-        n_trials_normalized = (n_trials)//num_per_batch #num_per_batch used to be one
-        if n_workers is None or n_workers <= 1:
-            # sequential fallback
-            for tries in range(n_trials_normalized):
-                if tries != 0 and tries % 10 == 0:
-                    print(f"{tries} out of {n_trials_normalized} done")
-                is_adm = _trial_worker_admis(tries, num_per_batch,s,e)
-                is_adm_num+=is_adm
-        else:
-            # parallel execution using ThreadPoolExecutor
-            with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                fut_kind = {}  # future -> ("dist"|"admis", tries)
+    for cntr in range(start, end):  #iterate only through successfull babai's
+        if cntr in BAI.correct_indices:
+            b, s, e = BAI.bse[cntr]
+            n_trials_normalized = (n_trials)//num_per_batch #num_per_batch used to be one
+            if n_workers is None or n_workers <= 1:
+                # sequential fallback
                 for tries in range(n_trials_normalized):
-                    fut = ex.submit(_trial_worker_admis, tries, num_per_batch, s, e)
-                    fut_kind[fut] = (tries)
-
-                # collect
-                for fut in as_completed(fut_kind):
-                    tries = fut_kind[fut]
-
                     if tries != 0 and tries % 10 == 0:
                         print(f"{tries} out of {n_trials_normalized} done")
+                    is_adm = _trial_worker_admis(tries, num_per_batch,s,e)
+                    is_adm_num+=is_adm
+            else:
+                # parallel execution using ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                    fut_kind = {}  # future -> ("dist"|"admis", tries)
+                    for tries in range(n_trials_normalized):
+                        fut = ex.submit(_trial_worker_admis, tries, num_per_batch, b, s, e)
+                        fut_kind[fut] = (tries)
 
-                    try:
-                        res = fut.result()
-                    except Exception:
-                        print(f"\n_trial_worker crashed for tries={tries}")
-                        traceback.print_exc()
-                        continue
-                    # _trial_worker_admis returns sum(is_adm)
-                    is_adm_num += int(res)
-        target_num += 1
-        # print(f"is_adm_num: {is_adm_num} | {n_trials_normalized*num_per_batch}")
-        if target_num%10==0:
-            print(f"{target_num} out of {end-start} targets done", flush=True)
-        
-        is_adm_nums.append(is_adm_num)
-        is_adm_num = 0
+                    # collect
+                    for fut in as_completed(fut_kind):
+                        tries = fut_kind[fut]
+
+                        if tries != 0 and tries % 10 == 0:
+                            print(f"{tries} out of {n_trials_normalized} done")
+
+                        try:
+                            res = fut.result()
+                        except Exception:
+                            print(f"\n_trial_worker crashed for tries={tries}")
+                            traceback.print_exc()
+                            continue
+                        # _trial_worker_admis returns sum(is_adm)
+                        is_adm_num += int(res)
+            target_num += 1
+            # print(f"is_adm_num: {is_adm_num} | {n_trials_normalized*num_per_batch}")
+            if target_num%10==0:
+                print(f"{target_num} out of {end-start} targets done", flush=True)
+            
+            is_adm_nums.append(is_adm_num)
+            is_adm_num = 0
     return is_adm_nums
 
 
