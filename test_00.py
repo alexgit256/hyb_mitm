@@ -113,6 +113,7 @@ def assert_near_integers(W_cand: np.ndarray, *, atol=1e-8, rtol=0.0):
 
 n = 144
 
+# uncomment the lines below to generate and reduce A from the scratch
 # A = IntegerMatrix(n,n)
 # A.randomize("qary", k=n//2, bits=14.2)
 
@@ -167,7 +168,8 @@ Tcp = deepcopy(T)[start_at:]
 
 
 t0 = perf_counter()
-nearest_plane(Rcp, Tcp, U)
+# nearest_plane(Rcp, Tcp, U)
+U = proj_submatrix_modulus_blas(Rcp,Tcp,dim=None)
 U = -U
 print(f"NP done in: {perf_counter()-t0}")
 
@@ -185,23 +187,6 @@ print("u:")
 print(U)
 print()
 print( np.shape(lines) )
-
-# Rcpp = deepcopy(R)[start_at:,start_at:]
-# Tcpp = deepcopy(T)[start_at:] #!
-
-# t0 = perf_counter()
-# Ucpp = proj_submatrix_modulus_blas( Rcpp,Tcpp )
-# print(f"Matmod done in: {perf_counter()-t0}")
-
-# lines = ( T[start_at:] + R[start_at:,start_at:]@Ucpp.astype(np.float64) )
-# dR = np.diag(R)
-# for i in range( start_at,n ):
-#     assert all( np.abs(lines[i-start_at] / dR[i]) < 0.501 ), f"Noo: {lines[i-start_at] / dR[i]}"
-# print("- - - lines my")
-# W_cand = np.linalg.inv(R[-cd:,-cd:])@(T[start_at:]-lines)
-# print(np.round(W_cand))
-# assert_near_integers(W_cand)
-# print("- - -")
 
 B = IntegerMatrix.from_matrix(A.T)
 G = GSO.Mat(B,float_type="dd")

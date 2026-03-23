@@ -142,7 +142,7 @@ def generateLWEInstances(
 
     rng = np.random.default_rng(seed)
 
-    A = rng.integers(0, q, size=(n, m), dtype=np.int64)
+    A = rng.integers(0, q, size=(n, m), dtype=np.int64)-q//2-1
 
     bse = []
     for _ in range(ntar):

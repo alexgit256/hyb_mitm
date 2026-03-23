@@ -63,7 +63,7 @@ def check_pairs_guess_admis(
     """
     if end is None:
         end = len(BAI.bse)
-    
+    np.set_printoptions(precision=4, suppress=True)
     # Helper that performs a single trial for current (b, s_correct_guess)
     def _trial_worker_admis(trie_idx, batch_size,b,s,e):
         with threadpool_limits(limits=THREADPOOL_LIMIT):
@@ -73,7 +73,8 @@ def check_pairs_guess_admis(
             kappa = BAI.kappa
             
             if not correct:  
-                sguess = rng.integers(-1, 2, size=(kappa,batch_size), dtype=np.int16)
+                raise NotImplementedError
+                # sguess = rng.integers(-1, 2, size=(kappa,batch_size), dtype=np.int16)
             else:
                 s_corr = np.asarray(s[-BAI.kappa:], dtype=np.int64)
                 msk_sublen = rng.integers(BAI.kappa//2, BAI.kappa, size=batch_size)
@@ -81,31 +82,104 @@ def check_pairs_guess_admis(
                 for j in range(batch_size):
                     msk[:msk_sublen[j], j] = 1
                     rng.shuffle(msk[:, j])
-                sguess = msk * s_corr[:, None]
+                sguess_1 = msk * s_corr[:, None]
+                # sguess_2 = s_corr[:, None] - sguess_1
+                #now w = sguess_1 + sguess_2
 
-            sec_proj_cols = BAI.QinvCT@sguess #t2
-            sec_proj_cols = sec_proj_cols[-BAI.cd:] #go to the projective sublattice
 
-            # - - - Admissibility: check that babai(guess2 + err) = babai(guess2) + babai(err) - - -
+            Cvg = BAI.QinvC@s_corr[:, None] #C vg  (note: NP(Cvg) should be v_l)
+            Cvg = Cvg[-BAI.cd:,:] #go to the projective sublattice
 
-            true_err = np.concatenate([e,-s[:-BAI.kappa]])[-BAI.cd:]
-            tmp0batch = sec_proj_cols + true_err[:,None]
-            W = proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], tmp0batch, dim=BAI.cd )
-            tmp0batch = tmp0batch + BAI.R[-BAI.cd:,-BAI.cd:]@W
+            Cw = BAI.QinvC@sguess_1  #C w
+            Cw = Cw[-BAI.cd:,:] #go to the projective sublattice
 
-            tmp1batch = sec_proj_cols
-            W = proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], tmp1batch, dim=BAI.cd )
-            tmp1batch = tmp1batch + BAI.R[-BAI.cd:,-BAI.cd:]@W
+            # computing NPCvg (debug)
+            NPCvg = copy( Cvg )
+            W_1 = proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], NPCvg, dim=BAI.cd )
+            # print(Cvg - NPCvg)
+            # print()
 
-            true_err = np.atleast_2d(true_err).T.astype(np.float64)
-            W = proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], true_err, dim=BAI.cd )
-            tmp2 = true_err + BAI.R[-BAI.cd:,-BAI.cd:]@W
+            # computing NP( Cw )
+            NPCw = copy( Cw )
+            W_1 = proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], NPCw, dim=BAI.cd )
+            NPCw = NPCw #+ BAI.R[-BAI.cd:,-BAI.cd:]@W_1 #NP( C v_g )
 
+            # computing NP( C v_g - Cw )
+            NPCvg_Cw = Cvg - Cw
+            W_2 = proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], NPCvg_Cw, dim=BAI.cd )
+
+            overall_dim = BAI.n+BAI.m-BAI.kappa
+            true_err = BAI.Qinv @ np.concatenate([e,-s[:-BAI.kappa]]).T #v_l in Son Cheon 2019/1019.pdf (rotated to align with R-factor)
+            proj_true_err = BAI.vec_project_onto( true_err, start=overall_dim-BAI.cd, end=overall_dim ) #projection of v_l (needed for the correct equation)
+
+            #  - - - Checking p_{NP} in Lemma 4.2 proof - - - 
+            pte = proj_true_err[-BAI.cd:]
+            pte_cp = np.atleast_2d(pte).T
+            proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], pte_cp, dim=BAI.cd )
+            # print()
+            tmp = pte - pte_cp[:, 0]
+            mask_NP = np.all(np.abs(tmp) <= 1e-6, axis=0)
+            print(f"any good_col_NP: {np.any(mask_NP)}")
+            #  - - - END Checking p_{NP} in Lemma 4.2 proof - - - 
+
+            #  - - - Checking p_s in Lemma 4.2 proof - - - 
+            Rdiag = np.diag( BAI.R[-BAI.cd:,-BAI.cd:] )
+
+            tmp = NPCw - NPCvg #should be in fund. par. by the proof of Lemma 4.2 (https://eprint.iacr.org/2019/1019.pdf)
+            tmp_scaled = tmp / Rdiag[:, None]
+            mask_s = np.all(np.abs(tmp_scaled) <= 0.5, axis=0)
+            # print( tmp_scaled )
+            print( np.any(mask_s) )
+            good_cols_s = np.where(mask_s)[0]
+            print(f"any good_col_s forward: {good_cols_s}")
+            print()
+
+            tmp = NPCw + NPCvg_Cw #should be in fund. par. by the proof of Lemma 4.2 (https://eprint.iacr.org/2019/1019.pdf)
+            tmp_scaled = tmp / Rdiag[:, None]
+            mask_s = np.all(np.abs(tmp_scaled) <= 0.5, axis=0)
+            # print( tmp_scaled )
+            print( np.any(mask_s) )
+            good_cols_s = np.where(mask_s)[0]
+            print(f"any good_col_s backward: {good_cols_s}")
+            
+            idx = good_cols_s[0]
+            lhs = tmp[:,idx:idx+1]
+            proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], lhs, dim=BAI.cd ) #because we do CVP, not SVP as in the paper
+            print(f"lhs = NPCvg: {np.all(np.abs(lhs - NPCvg) <= 1e-6)}")
+            # print(lhs - NPCvg)
+
+            # - - - END Checking p_s in Lemma 4.2 proof - - - 
+
+            """
+            print("- - - - sanity check - - -")
+            
+            pte = proj_true_err[-BAI.cd:]
+            pte_cp = np.atleast_2d(pte).T
+            proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], pte_cp, dim=BAI.cd )
+            print(pte - pte_cp[:, 0])
+            print()
+
+            print("end test - - - -")
+            """
+
+            NPCw_Cvg = Cw - Cvg
+            W_2 = proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], NPCw_Cvg, dim=BAI.cd )
+
+            # checking if NP( C v_g - Cw ) + NP( Cw ) = v_l which becomes
+            # NP( Cw - Cvg ) = v_l in our notation (!)
             is_adm = []
-            tmp12 = tmp0batch - (tmp1batch+tmp2)
+            tmp12 = (NPCw_Cvg-NPCvg)
+
             for col in tmp12.T:
-                okay = all(np.isclose(col,0.0,atol=0.001))
+            # for j in good_cols_s:
+            #     col = tmp12[:, j]
+                ccol = col[-BAI.cd:] - proj_true_err[-BAI.cd:]
+                # in our notations it means ccol is in proj. lat.
+                proj_submatrix_modulus_blas( BAI.R[-BAI.cd:,-BAI.cd:], np.atleast_2d(ccol).T, dim=BAI.cd )
+                print(f"ccol: {ccol}")
+                okay = all(np.isclose(ccol,0.0,atol=0.001))
                 is_adm.append(okay)
+
 
         return sum(is_adm) 
 
@@ -122,7 +196,7 @@ def check_pairs_guess_admis(
                 for tries in range(n_trials_normalized):
                     if tries != 0 and tries % 10 == 0:
                         print(f"{tries} out of {n_trials_normalized} done")
-                    is_adm = _trial_worker_admis(tries, num_per_batch,s,e)
+                    is_adm = _trial_worker_admis(tries, num_per_batch,b,s,e)
                     is_adm_num+=is_adm
             else:
                 # parallel execution using ThreadPoolExecutor
@@ -243,9 +317,10 @@ def run_single_instance(idx: int,
     succnum, itnum = lwe_instance.check_correct_guesses()
     print(f"[inst {idx}] check_correct_guess -> ({succnum}, {itnum})")
 
-    print(f"[inst {idx}] check_pairs_guess_admis(correct=False)")
-    is_adm_num_incorrect = check_pairs_guess_admis(
-        lwe_instance,n_trials=n_trials, n_workers=inner_n_workers, num_per_batch=num_per_batch, correct=False)
+    is_adm_num_incorrect = None
+    # print(f"[inst {idx}] check_pairs_guess_admis(correct=False)")
+    # is_adm_num_incorrect = check_pairs_guess_admis(
+    #     lwe_instance,n_trials=n_trials, n_workers=inner_n_workers, num_per_batch=num_per_batch, correct=False)
 
     print(f"[inst {idx}] check_pairs_guess_admis(correct=True)")
     is_adm_num_correct   = check_pairs_guess_admis(
@@ -274,10 +349,6 @@ def run_single_instance(idx: int,
         "is_adm_num_incorrect": is_adm_num_incorrect,
         "succnum": succnum,
         "itnum": itnum,
-        # "infdiff_correct": infdiff_correct,
-        # "infdiff_incorrect": infdiff_incorrect,
-        # "mindds_correct": mindds_correct,
-        # "mindds_incorrect": mindds_incorrect,
         "loaded": loaded,
     }
         
@@ -286,19 +357,19 @@ def main():
     n_workers = 2  # set this >1 to parallelize across instances
     n_lats = 2  # number of lattices    #5
     n_tars = 20 ## per-lattice instances #20
-    n_trials = 256*10 #256*4          # per-lattice-instance trials in check_pairs_guess_admis. SHOULD be div'e by num_per_batch
+    n_trials = 256*4 #256*4          # per-lattice-instance trials in check_pairs_guess_admis. SHOULD be div'e by num_per_batch
     num_per_batch = 256 #256 #do not go above 256
     inner_n_workers = 2   # threads for inner parallelism
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 130, 130, 4096
+    n, m, q = 112, 112, 3329
     seed_base = 0
-    dist_s, dist_param_s, dist_e, dist_param_e = "binomial", 2, "gaussian", 1.5
-    kappa = 25
-    cd = 64
+    dist_s, dist_param_s, dist_e, dist_param_e = "binomial", 2, "ternary_sparse", 32
+    kappa = 10
+    cd = 30
     beta_max = 45
-    babai_succ_rate = 0.5
+    babai_succ_rate = 1.01
 
     os.makedirs(in_path, exist_ok=True)
 

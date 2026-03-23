@@ -22,8 +22,6 @@ If `depth` is supplied, BLASter's deep-LLL is called in between calls of the SVP
 Otherwise BLASter's LLL is run.
 """
 
-FPLLL.set_precision(180)
-
 G6K_IMPORTED = False
 try:
   from g6k import Siever, SieverParams

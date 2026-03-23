@@ -91,7 +91,7 @@ class BatchAttackInstance:
             for i in range(m, m+n):
                 B[i][i] = 1
             for i in range(m, m+n):
-                for j in range(n):
+                for j in range(m):
                     B[i][j] = int( self.A[i-m,j] )
 
             H = B[:len(B)-self.kappa] #the part of basis to be reduced
@@ -509,13 +509,13 @@ def main():
 
     assert n_trials%num_per_batch == 0, f"n_trials should be divisible by num_per_batch"
 
-    n, m, q = 110, 110, 4096
+    n, m, q = 125, 150, 18839
     seed_base = 0
-    dist_s, dist_param_s, dist_e, dist_param_e = "binomial", 2, "gaussian", 1.5
-    kappa = 25
-    cd = 64
-    beta_max = 42
-    babai_succ_rate = 1.01
+    dist_s, dist_param_s, dist_e, dist_param_e = "ternary", (1/3.), "discrete_gaussian", 2.01,
+    kappa = 20
+    cd = 80
+    beta_max = 51
+    babai_succ_rate = 0.98
 
     os.makedirs(in_path, exist_ok=True)
 

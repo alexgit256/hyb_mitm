@@ -90,13 +90,13 @@ def check_pairs_guess_dist(
                 sguess_2 += rng.integers(-1, 2, size=(kappa, batch_size), dtype=np.int16)
 
             # compute projections and shifts
-            sec_proj1_cols = BAI.QinvCT@sguess_1  #note: sguess_1 is a guess, so we can use it here
+            sec_proj1_cols = BAI.QinvC@sguess_1  #note: sguess_1 is a guess, so we can use it here
 
             t1 = BAI.Qinv@np.concatenate( [b,(BAI.n-BAI.kappa)*[0]] ) #original target alligned wrt GS vectors
             tbatch1 = t1[:,None] - sec_proj1_cols   #t1 = target - guess_1
             tbatch1 = BAI._apply_proj_submatrix_modulus( BAI.R[-BAI.cd:,-BAI.cd:], tbatch1, dim=BAI.cd )
 
-            sec_proj2_cols = BAI.QinvCT@sguess_2 #t2
+            sec_proj2_cols = BAI.QinvC@sguess_2 #t2
             tbatch2 = BAI._apply_proj_submatrix_modulus( BAI.R[-BAI.cd:,-BAI.cd:], sec_proj2_cols, dim=BAI.cd )
             
 
