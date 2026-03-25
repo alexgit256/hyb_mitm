@@ -13,19 +13,13 @@ def project_onto_last(G,v,cd):
     v_gh[:-cd] = 0
     return np.asarray(  G.to_canonical( v_gh ) )
 
-n, m, q = 110, 110, 18839 # 327689
+n, m, q = 130, 130, 18839 # 327689
 # dist_s, dist_param_s, dist_e, dist_param_e = "ternary", 1./2, "discrete_gaussian", 1.5
-dist_s, dist_param_s, dist_e, dist_param_e = "ternary", 1/3., "discrete_gaussian", 1.5,
-kappa = 50
-n_targets = 50
-
-""" this doesn't work well
-dist_s, dist_param_s, dist_e, dist_param_e = "ternary", (1/3.), "discrete_gaussian", 0.5,
+dist_s, dist_param_s, dist_e, dist_param_e = "ternary", 1/3., "discrete_gaussian", 1.,
 kappa = 20
-n_targets = 20
-"""
+n_targets = 500
 
-a, b, n_dims = 25, 50, 2 #(50, 100, 6) -> [50,60,...,100]
+a, b, n_dims = 50, n+m-kappa, 5 #(50, 100, 6) -> [50,60,...,100]
 cds = np.asarray( np.round( np.linspace( a, b, n_dims ) ), dtype=int )
 # cds=[50]
 
@@ -60,8 +54,10 @@ lll_size = 64
 LatRed_instance = LatticeReduction(H)
 Hred = LatRed_instance(lll_size=lll_size, delta=0.99, cores=1, beta=42, bkz_tours=2)
 print(f"BKZ-{42} done", flush=True) #faster to preprocess for beta > 30
-Hred = LatRed_instance(lll_size=lll_size, delta=0.99, cores=5, beta=min(52,beta), bkz_tours=bkz_tours) #min(52,beta)
-print(f"BKZ- done")
+beta = min(52,beta)
+if beta>40:
+    Hred = LatRed_instance(lll_size=lll_size, delta=0.99, cores=5, beta=beta, bkz_tours=bkz_tours) 
+    print(f"BKZ-{beta} done")
 
 G = GSO.Mat( IntegerMatrix.from_matrix( Hred ), float_type="mpfr")
 G.update_gso()
@@ -85,13 +81,14 @@ for i in range(len(bse) - 1, -1, -1):
 
 print(f"{babai_lift_success} left")
 
+
 # all_guesses_babied = False
 results = {}
-for cd in cds:
+
+for j, cd in enumerate(cds):
+    print( f"computing dim {cd}" )
     full_dim_succ = 0
     cd_dim_succ = 0
-
-
     for i, bse_inst in enumerate(bse[:]):
         b,s,e = bse_inst
 
@@ -109,29 +106,43 @@ for cd in cds:
         target_w1_proj = project_onto_last(G,target_w1,cd)
         target_w2_proj = project_onto_last(G,target_w2,cd)
 
+        tmp = target_w1@(target_w1-target_w1_proj)
+        assert np.abs(tmp)
+
         babai_res_w1 = G.babai(target_w1)
         err_w1 = target_w1 - G.B.multiply_left(babai_res_w1)
         #same but in projective lattice
-        babai_res_w1_proj = G.babai(target_w1_proj,start=G.d-cd)
+        babai_res_w1_proj = G.babai(target_w1_proj) #,start=G.d-cd
         err_w1_proj  = target_w1_proj  - G.B.multiply_left(babai_res_w1_proj)
 
         babai_res_w2 = G.babai(target_w2)
         err_w2 = target_w2 - G.B.multiply_left(babai_res_w2)
         #same but in projective lattice
-        babai_res_w2_proj = G.babai(target_w2_proj,start=G.d-cd)
+        babai_res_w2_proj = G.babai(target_w2_proj) #,start=G.d-cd
         err_w2_proj = target_w2_proj - G.B.multiply_left(babai_res_w2_proj)
 
         err_w1_gs, err_w2_gs = G.from_canonical(err_w1), G.from_canonical(err_w2)
-        lhs, rhs = error = G.from_canonical(np.concatenate([e,-s[:-kappa]])) - np.array( err_w1_gs ) , np.array( err_w2_gs )
+        lhs, rhs = G.from_canonical(np.concatenate([e,-s[:-kappa]])) - np.array( err_w1_gs ) , np.array( err_w2_gs )
+        #same but in projective lattice #debug -- should be == lhs_proj, rhs_proj below
+        lhs_proj2, rhs_proj2 = G.from_canonical(np.concatenate([e,-s[:-kappa]]))[-cd:] - np.array( err_w1_gs )[-cd:] , np.array( err_w2_gs )[-cd:]
+
+        err_w1_proj, err_w2_proj = G.from_canonical(err_w1_proj)[-cd:] , G.from_canonical(err_w2_proj)[-cd:]
+        lhs_proj, rhs_proj = G.from_canonical(np.concatenate([e,-s[:-kappa]]))[-cd:] - np.array( err_w1_proj ) , np.array( err_w2_proj )
+
+        # print(f"lhs_proj1-lhs_proj: {lhs_proj2-lhs_proj}")
+        # print(f"rhs_proj2-rhs_proj: {rhs_proj2-rhs_proj}")
+        assert np.all( np.isclose(lhs_proj2-lhs_proj,0.0, atol=1e-7) ), f"lhs_proj2 != lhs_proj"
+        assert np.all( np.isclose(rhs_proj2-rhs_proj,0.0, atol=1e-7) ), f"rhs_proj2 != rhs_proj"
+        # print("- - -")
         
         diff = lhs-rhs
-        print(diff)
+        # print(diff)
         if np.all( np.isclose(diff, 0.0, atol=1e-7) ):
             full_dim_succ+=1
-        if np.all( np.isclose(diff[-cd], 0.0, atol=1e-7) ):
+        diff_proj = lhs_proj-rhs_proj
+        if np.all( np.isclose(diff_proj, 0.0, atol=1e-7) ):
             cd_dim_succ+=1
         
-        print("- - -")
         # error = G.from_canonical(np.concatenate([e,-s[:-kappa]]))
         # print( f"err_w1_gs: {err_w1_gs }" )
         # print( f"err_w2_gs: {err_w2_gs}" )
