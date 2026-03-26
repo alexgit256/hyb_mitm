@@ -1,13 +1,13 @@
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
-from size_reduction import nearest_plane
+# from size_reduction import nearest_plane
 from fpylll import IntegerMatrix, GSO, FPLLL
 FPLLL.set_precision(208)
 from zgsa_fast import find_beta
 import numpy as np
 
 def project_onto_last(G,v,cd):
-    assert cd <= G.d, f"Too marge dim {cd}>{G.d}"
+    assert cd <= G.d, f"Too large dim {cd}>{G.d}"
 
     v_gh = np.asarray( G.from_canonical( v ) )
     v_gh[:-cd] = 0
@@ -92,7 +92,7 @@ for i, bse_inst in enumerate(bse[:]):
 
     #check admissibility; Odlyzko-style splitting: sguess = [ sguess[:kappa/2] | 0..0 ] + [0..0 | sguess[kappa/2:]]
     #w = sguess[]
-    #TODO: split s as above, run NP on these splits mulptiplied by C, check that the difference/sum is equal to tshift (which is equal to the error)
+    #split s as above, run NP on these splits mulptiplied by C
     w1 = np.concatenate([sguess[:kappa//2],(kappa//2)*[0]])
     w2 = np.concatenate([(kappa//2)*[0], sguess[kappa//2:]])
 
@@ -126,8 +126,7 @@ for j, cd in enumerate(cds):
         sguess = s[-kappa:]
 
         #check admissibility; Odlyzko-style splitting: sguess = [ sguess[:kappa/2] | 0..0 ] + [0..0 | sguess[kappa/2:]]
-        #w = sguess[]
-        #TODO: split s as above, run NP on these splits mulptiplied by C, check that the difference/sum is equal to tshift (which is equal to the error)
+        #split s as above, run NP on these splits mulptiplied by C (projected to an appropriate cd-dimensional proj. sublat.),)
         w1 = np.concatenate([sguess[:kappa//2],(kappa//2)*[0]])
         w2 = np.concatenate([(kappa//2)*[0], sguess[kappa//2:]])
 
@@ -160,6 +159,35 @@ for j, cd in enumerate(cds):
     print(f"{cd_dim_succ} out of {babai_lift_success}")
     results[cd] = { "bab_fpylll_proj": cd_dim_succ } 
 
-print(f"- - - n, q, kappa, dist_s, dist_e: {n, q, kappa, (dist_s,dist_param_s), (dist_e,dist_param_e)} - - -", flush=True)
-print(f"{full_dim_succ} succ MitM out of {babai_lift_success} on full dimension")
-print(results)
+# print(f"- - - n, q, kappa, dist_s, dist_e: {n, q, kappa, (dist_s,dist_param_s), (dist_e,dist_param_e)} - - -", flush=True)
+# print(f"{full_dim_succ} succ MitM out of {babai_lift_success} on full dimension")
+# print(results)
+
+experiment_dict = {
+        "exp_id": None,
+        "params": {
+            "n": int(n),
+            "m": int(m),
+            "q": int(q),
+            "kappa": int(kappa),
+            "n_targets": int(n_targets),
+            "dist_s": dist_s,
+            "dist_param_s": float(dist_param_s),
+            "dist_e": dist_e,
+            "dist_param_e": float(dist_param_e),
+            "cds": [int(x) for x in cds],
+            "bkz_tours": int(bkz_tours),
+            "lll_size": int(lll_size),
+        },
+        "beta": int(beta),
+        "babai_lift_success": int(babai_lift_success),
+        "full_dim_succ": int(full_dim_succ),
+        "results": {
+            int(cd): {
+                k: int(v) for k, v in val.items()
+            }
+            for cd, val in results.items()
+        },
+    }
+
+print( experiment_dict )
