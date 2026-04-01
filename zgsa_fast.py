@@ -2,7 +2,7 @@
 #as well as the Lattice Estimator
 
 
-from math import pi, exp, log
+from math import pi, exp, log, sqrt, erf
 
 def GH_sv_factor_squared(k):
     return ((pi * k)**(1. / k) * k / (2. * pi * exp(1)))
@@ -48,6 +48,71 @@ def bkzgsa_gso_len(logvol, i, d, beta=None, delta=None):
 
     return delta**(d - 1 - 2 * i) * exp(logvol / d)
 
+def qary_simulator(f, d, n, q, beta, xi=1, tau=1, dual=False, ignore_qary=False):
+    """
+    Reduced lattice shape calling ``f``.
+
+    :param d: Lattice dimension.
+    :param n: The number of `q` vectors is `d-n-1`.
+    :param q: Modulus `q`
+    :param beta: Block size β.
+    :param xi: Scaling factor ξ for identity part.
+    :param tau: Kannan factor τ.
+    :param dual: perform reduction on the dual.
+    :param ignore_qary: Ignore the special q-ary structure (forget q vectors)
+
+    """
+
+    assert 2 <= beta <= d
+
+    if not tau:
+        r = [q**2] * (d - n) + [xi**2] * n
+    else:
+        r = [q**2] * (d - n - 1) + [xi**2] * n + [tau**2]
+
+    if ignore_qary:
+        r = GSA(d, n, q, 2, xi=xi, tau=tau)
+
+    if dual:
+        # 1. reverse and reflect the basis (go to dual)
+        r = [1 / r_ for r_ in reversed(r)]
+        # 2. simulate reduction on the dual basis
+        r = f(r, beta)
+        # 3. reflect and reverse the basis (go back to primal)
+        r = [1 / r_ for r_ in reversed(r)]
+        return r
+    else:
+        return f(r, beta)
+
+
+
+
+
+def CN11(d, n, q, beta, xi=1, tau=1, dual=False, ignore_qary=False):
+    """
+    Reduced lattice shape using simulator from [AC:CheNgu11]_
+
+    :param d: Lattice dimension.
+    :param n: The number of `q` vectors is `d-n-1`.
+    :param q: Modulus `q`
+    :param beta: Block size β.
+    :param xi: Scaling factor ξ for identity part.
+    :param tau: Kannan factor τ.
+    :param dual: perform reduction on the dual.
+    :param ignore_qary: Ignore the special q-ary structure (forget q vectors)
+    :returns: squared Gram-Schmidt norms
+
+    """
+
+    from fpylll import BKZ
+    from fpylll.tools.bkz_simulator import simulate
+
+    assert 2 <= beta <= d
+
+    def f(r, beta):
+        return simulate(r, BKZ.EasyParam(beta))[0]
+
+    return qary_simulator(f=f, d=d, n=n, q=q, beta=beta, xi=xi, tau=tau, dual=dual, ignore_qary=ignore_qary)
 
 def plot_gso(r, *args, **kwds):
     return line([(i, r_,) for i, r_ in enumerate(r)], *args, **kwds)
@@ -60,3 +125,77 @@ def find_beta(d, n, q, st_dev_e):
         if lhs < gso_len:
             return beta
     return float('inf')
+
+# as per Lemma 4.2 from https://eprint.iacr.org/2019/1019.pdf
+# assumes dist_param_e=dist_param_s="ternary"
+#input: R-factor from G.r() storing ||b_i*||^2
+def adm_probability(r,alpha=None,q=None,mode="ternary"):
+    p = 1
+    if mode=="ternary":
+        r = [ exp(2*rr) for rr in r ]
+        for i in range(len(r)):
+            p*=(1-2./(3*(sqrt(r[i])+1)))
+    if mode in ("discrete_gaussian", "gaussian"):
+        sqrtpi = sqrt(pi)
+        for i in range(len(r)):
+            risqrtpi_aq = r[i] * sqrtpi / (alpha*q)
+            try:
+                p *= erf(risqrtpi_aq) + alpha*q/r[i] * ( ( exp( -(risqrtpi_aq)**2 ) - 1 ) / pi )
+            except Exception as err:
+                print(err)
+                return 0
+    return p
+
+# #only for ternary
+# def find_beta_for_adm(d, n, q, st_dev_e, target_succ_probability):
+#     for beta in range(2, d-10, 1):
+#         gso_len = ZGSA(d,n,q, beta)
+#         if adm_probability([exp(RR(2*i)) for i in gso_len])>=target_succ_probability:
+#             return beta
+#     return float('inf')
+
+# def find_beta_for_adm_proj(d, n, q, st_dev_e, target_succ_probability,cd):
+#     for beta in range(2, d-10, 1):
+#         gso_len = ZGSA(d,n,q, beta)
+#         if adm_probability([exp(min(128,RR(2*i))) for i in gso_len[-cd:]])>=target_succ_probability:
+#             return beta
+#     return float('inf')
+
+def find_beta_for_adm_proj(d, n, q, dist_e, st_dev_e, target_succ_probability, cd):
+    """
+    Find the smallest beta in [2, d-10) such that
+
+        adm_probability([exp(min(128, 2*rr)) for rr in ZGSA(...)[-cd:]])
+            >= target_succ_probability
+
+    using binary search.
+
+    Notes:
+    - This assumes the predicate is monotone in beta.
+    - `st_dev_e` is retained in the signature for compatibility, as in your original code.
+    """
+
+    lo = 2
+    hi = d - 10  # exclusive upper bound in the original range(2, d-10)
+
+    if lo >= hi:
+        return inf
+
+    def succeeds(beta):
+        gso_len = CN11(d, n, q, beta)
+        gso_len = [ sqrt(rr) for rr in gso_len ]
+        alpha = st_dev_e / q * sqrt(2*pi)
+        tmp = adm_probability([rr for rr in gso_len[-cd:]],alpha=alpha,q=q, mode=dist_e ) #gaussian
+        # print(f"beta={beta}, p={tmp}")
+        return tmp >= target_succ_probability
+
+
+    # Binary search for the leftmost beta that succeeds
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if succeeds(mid):
+            hi = mid
+        else:
+            lo = mid + 1
+
+    return lo

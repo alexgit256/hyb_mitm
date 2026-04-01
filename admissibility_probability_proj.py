@@ -13,7 +13,7 @@ def project_onto_last(G,v,cd):
     v_gh[:-cd] = 0
     return np.asarray(  G.to_canonical( v_gh ) )
 
-n, m, q = 100, 100, 18839 # 327689
+n, m, q = 120, 120, 18839 # 327689
 # dist_s, dist_param_s, dist_e, dist_param_e = "ternary", 1./2, "discrete_gaussian", 1.5
 dist_s, dist_param_s, dist_e, dist_param_e = "ternary", 1/3., "discrete_gaussian", 1.,
 kappa = 20

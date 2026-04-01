@@ -9,7 +9,7 @@ from fpylll import IntegerMatrix, GSO, FPLLL
 
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
-from zgsa_fast import find_beta
+from zgsa_fast import find_beta_for_adm_proj
 
 
 # ----------------------------
@@ -18,13 +18,14 @@ from zgsa_fast import find_beta
 FPLLL.set_precision(208)
 
 n, m, q = 100, 100, 18839
-dist_s, dist_param_s = "ternary", 1 / 3.0
+dist_s, dist_param_s = "discrete_gaussian", 1.0
 dist_e, dist_param_e = "discrete_gaussian", 1.0
 
 kappa = 20
 # Number of independent lattices / experiments
 n_lattices = 10
-n_targets = 2000
+n_targets = 1000
+target_succ_probability = 0.005 #controls the blocksize of BKZ
 
 a, b, n_dims = 40, min(100, n + m - kappa), 4
 cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
@@ -72,15 +73,17 @@ def build_lwe_basis(A, n, m, q):
     return B
 
 
-def compute_beta(n, m, q, kappa, dist_param_e):
+def compute_beta(n, m, q, kappa, dist_param_e,cd):
     """
     Keep the original beta logic.
     """
-    beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e)
+    # beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
+    beta = find_beta_for_adm_proj(
+        n+m-kappa, n, q, dist_e, dist_param_e, 
+        target_succ_probability=target_succ_probability, 
+        cd=cd)  #use this for gauss
     if beta > n:
         beta = 50
-    if beta > 66:
-        beta = 66
     return int(beta)
 
 
@@ -139,7 +142,7 @@ def run_one_lattice(exp_id):
     C = np.array([row[:len(B) - kappa] for row in B[len(B) - kappa:]], dtype=np.int64)
 
     # 4) Compute beta
-    beta = compute_beta(n, m, q, kappa, dist_param_e)
+    beta = compute_beta(n, m, q, kappa, dist_param_e, cds[0])
 
     # 5) Reduce basis
     Hred = reduce_lattice(H, beta, lll_size, bkz_tours)
@@ -268,7 +271,7 @@ def run_one_lattice(exp_id):
     }
 
     # 11) Dump per-experiment pickle
-    out_path = experiments_dir / f"exp_{exp_id:04d}.pkl"
+    out_path = experiments_dir / f"exp_{exp_id:04d}_{n}_{q}_{kappa}_{dist_s}_{dist_param_s}_{dist_e}_{dist_param_e}.pkl"
     with open(out_path, "wb") as f:
         pickle.dump(experiment_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
 
