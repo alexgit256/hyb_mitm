@@ -9,37 +9,8 @@ from fpylll import IntegerMatrix, GSO, FPLLL
 
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
-from zgsa_fast import find_beta_for_adm_proj
-
-
-# ----------------------------
-# Configuration
-# ----------------------------
-FPLLL.set_precision(208)
-
-n, m, q = 100, 100, 18839
-dist_s, dist_param_s = "discrete_gaussian", 1.0
-dist_e, dist_param_e = "discrete_gaussian", 1.0
-
-kappa = 20
-# Number of independent lattices / experiments
-n_lattices = 10
-n_targets = 1000
-target_succ_probability = 0.005 #controls the blocksize of BKZ
-
-a, b, n_dims = 40, min(100, n + m - kappa), 4
-cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
-
-bkz_tours = 5
-lll_size = 64
-
-# Parallelism over lattices
-max_workers = min(n_lattices, os.cpu_count() or 1)
-
-# Output directory
-experiments_dir = Path("experiments")
-experiments_dir.mkdir(parents=True, exist_ok=True)
-
+from zgsa_fast import find_beta_for_adm_proj, find_beta, bkzgsa_gso_len, adm_probability2
+from math import sqrt, log
 
 # ----------------------------
 # Helpers
@@ -73,15 +44,15 @@ def build_lwe_basis(A, n, m, q):
     return B
 
 
-def compute_beta(n, m, q, kappa, dist_param_e,cd):
+def compute_beta(n, m, q, kappa, dist_param_e, cd):
     """
     Keep the original beta logic.
     """
-    # beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
-    beta = find_beta_for_adm_proj(
-        n+m-kappa, n, q, dist_e, dist_param_e, 
-        target_succ_probability=target_succ_probability, 
-        cd=cd)  #use this for gauss
+    beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
+    # beta = find_beta_for_adm_proj(
+    #     n+m-kappa, n, q, dist_e, dist_param_e, 
+    #     target_succ_probability=target_succ_probability, 
+    #     cd=cd)  #use this for gauss
     if beta > n:
         beta = 50
     return int(beta)
@@ -115,8 +86,61 @@ def reduce_lattice(H, beta, lll_size, bkz_tours):
 def as_python_int(x):
     return int(x) if isinstance(x, (np.integer,)) else x
 
+def expected_bdd_err_norm(d, dist_e, dist_s,  dist_param_s, dist_param_e):
+    """
+    d : dimension of the bdd error (projected or non-projected)
+    return: expected Euclidean norm of the bdd error vector
+    TODO: generalize to different distributions
+    """
+    assert dist_e==dist_s and dist_param_s==dist_param_e 
+    if dist_e=="ternary":
+        return sqrt(d*2*dist_param_s)
+    elif dist_e=="discrete_gaussian":
+        return dist_param_e*sqrt(d)
+    elif dist_e=="binomial":
+        return sqrt(d)*dist_param_e/2. #ToDo: check: centered binomial variance: eta/2
 
-def run_one_lattice(exp_id):
+    else: raise NotImplementedError(f"Distribution {dist_param_s!r} is not implemented in expected_bdd_err_norm.")
+
+# ----------------------------
+# Configuration
+# ----------------------------
+FPLLL.set_precision(208)
+
+n, m, q = 100, 100, 3299
+dist_s, dist_param_s = "ternary", 1/3.
+dist_e, dist_param_e = "ternary", 1/3.
+
+kappa = 40
+# Number of independent lattices / experiments
+n_lattices = 100
+n_targets = 100
+target_succ_probability = 0.005 #controls the blocksize of BKZ
+
+a, b, n_dims = 40, min(100, n + m - kappa), 4
+cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
+print("cd values:", cds)
+
+bkz_tours = 5
+lll_size = 64
+# Compute beta
+beta_s = compute_beta(n, m, q, kappa, dist_param_e, cds[0])
+beta_values = [beta_s+i*10 for i in range(7) if beta_s+i*10<65]
+print("beta values:", beta_values)
+
+# Parallelism over lattices
+max_workers = 5 #min(n_lattices, os.cpu_count() or 1)
+
+# Output directory
+experiments_dir = Path("experiments")
+experiments_dir.mkdir(parents=True, exist_ok=True)
+
+# ----------------------------
+# Main function
+# ----------------------------
+
+
+def run_one_lattice(exp_id, beta_values):
     """
     Run the full experiment for one independently generated lattice
     and its n_targets corresponding LWE instances.
@@ -141,69 +165,47 @@ def run_one_lattice(exp_id):
     H = IntegerMatrix.from_matrix([row[:len(B) - kappa] for row in Htmp])
     C = np.array([row[:len(B) - kappa] for row in B[len(B) - kappa:]], dtype=np.int64)
 
-    # 4) Compute beta
-    beta = compute_beta(n, m, q, kappa, dist_param_e, cds[0])
+    # dictionary to collect statistic on full lattice
+    # [# babai success on full dim, #succ admissibility on full dim, estimated adm. succ using exact R, estimated adm. succ using GSA]
+    stats_full = dict(  [ (beta, [0, 0, 0, 0] ) for beta in beta_values]  )
 
-    # 5) Reduce basis
-    Hred = reduce_lattice(H, beta, lll_size, bkz_tours)
+    # dictionary to collect statistic on projected lattices
+    #for each beta and each cd, collect the same data as for stats_full except # babai success on full dim
+    stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0]) for cd in cds ])) for beta in beta_values] )
 
-    # 6) Build GSO
-    G = GSO.Mat(IntegerMatrix.from_matrix(Hred), float_type="mpfr")
-    G.update_gso()
+    for beta in beta_values:
 
-    # 7) Babai-lift filtering
-    bse_survivors = list(bse)
-    babai_lift_success = 0
+        # 5) Reduce basis
+        Hred = reduce_lattice(H, beta, lll_size, bkz_tours)
 
-    for i in range(len(bse_survivors) - 1, -1, -1):
-        b_vec, s_vec, e_vec = bse_survivors[i]
+        # 6) Build GSO
+        G = GSO.Mat(IntegerMatrix.from_matrix(Hred), float_type="mpfr")
+        G.update_gso()
 
-        sguess = s_vec[-kappa:]
-        sguess_times_C = sguess @ C
-        target = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - sguess_times_C
+        # 7) Babai-lift filtering
+        bse_survivors = list(bse)
+        babai_lift_success = 0
 
-        babai_res = G.babai(target)
-        tshift = target - G.B.multiply_left(babai_res)
+        for i in range(len(bse_survivors) - 1, -1, -1):
+            b_vec, s_vec, e_vec = bse_survivors[i]
 
-        diff = tshift - np.concatenate([e_vec, -s_vec[:-kappa]])
-        if np.all(np.isclose(diff, 0.0, atol=1e-7)):
-            babai_lift_success += 1
-        else:
-            del bse_survivors[i]
+            sguess = s_vec[-kappa:]
+            sguess_times_C = sguess @ C
+            target = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - sguess_times_C
 
-    # 8) Full-dimension admissibility
-    full_dim_succ = 0
-    for b_vec, s_vec, e_vec in bse_survivors:
-        sguess = s_vec[-kappa:]
+            babai_res = G.babai(target)
+            tshift = target - G.B.multiply_left(babai_res)
 
-        w1 = np.concatenate([sguess[:kappa // 2], np.zeros(kappa // 2, dtype=int)])
-        w2 = np.concatenate([np.zeros(kappa // 2, dtype=int), sguess[kappa // 2:]])
+            diff = tshift - np.concatenate([e_vec, -s_vec[:-kappa]])
+            if np.all(np.isclose(diff, 0.0, atol=1e-7)):
+                babai_lift_success += 1
+            else:
+                del bse_survivors[i]
 
-        target_w1 = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - w1 @ C
-        target_w2 = -w2 @ C
+        stats_full[beta][0] = len(bse_survivors)
 
-        babai_res_w1 = G.babai(target_w1)
-        err_w1 = target_w1 - G.B.multiply_left(babai_res_w1)
-
-        babai_res_w2 = G.babai(target_w2)
-        err_w2 = target_w2 - G.B.multiply_left(babai_res_w2)
-
-        err_w1_gs = np.asarray(G.from_canonical(err_w1), dtype=float)
-        err_w2_gs = np.asarray(G.from_canonical(err_w2), dtype=float)
-
-        lhs = np.asarray(G.from_canonical(np.concatenate([e_vec, -s_vec[:-kappa]])), dtype=float) - err_w1_gs
-        rhs = err_w2_gs
-
-        diff = lhs - rhs
-        if np.all(np.isclose(diff, 0.0, atol=1e-7)):
-            full_dim_succ += 1
-
-    # 9) Projected admissibility by cd
-    results = {}
-    for cd in cds:
-        cd = int(cd)
-        cd_dim_succ = 0
-
+        # 8) Full-dimension admissibility
+        full_dim_succ = 0
         for b_vec, s_vec, e_vec in bse_survivors:
             sguess = s_vec[-kappa:]
 
@@ -213,33 +215,84 @@ def run_one_lattice(exp_id):
             target_w1 = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - w1 @ C
             target_w2 = -w2 @ C
 
-            target_w1_proj = project_onto_last(G, target_w1, cd)
-            target_w2_proj = project_onto_last(G, target_w2, cd)
+            babai_res_w1 = G.babai(target_w1)
+            err_w1 = target_w1 - G.B.multiply_left(babai_res_w1)
 
-            babai_res_w1_proj = G.babai(target_w1_proj)
-            err_w1_proj = target_w1_proj - G.B.multiply_left(babai_res_w1_proj)
+            babai_res_w2 = G.babai(target_w2)
+            err_w2 = target_w2 - G.B.multiply_left(babai_res_w2)
 
-            babai_res_w2_proj = G.babai(target_w2_proj)
-            err_w2_proj = target_w2_proj - G.B.multiply_left(babai_res_w2_proj)
+            err_w1_gs = np.asarray(G.from_canonical(err_w1), dtype=float)
+            err_w2_gs = np.asarray(G.from_canonical(err_w2), dtype=float)
 
-            err_w1_proj_gs = np.asarray(G.from_canonical(err_w1_proj), dtype=float)[-cd:]
-            err_w2_proj_gs = np.asarray(G.from_canonical(err_w2_proj), dtype=float)[-cd:]
+            lhs = np.asarray(G.from_canonical(np.concatenate([e_vec, -s_vec[:-kappa]])), dtype=float) - err_w1_gs
+            rhs = err_w2_gs
 
-            lhs_proj = np.asarray(
-                G.from_canonical(np.concatenate([e_vec, -s_vec[:-kappa]])),
-                dtype=float
-            )[-cd:] - err_w1_proj_gs
-            rhs_proj = err_w2_proj_gs
+            diff = lhs - rhs
+            if np.all(np.isclose(diff, 0.0, atol=1e-7)):
+                full_dim_succ += 1
 
-            diff_proj = lhs_proj - rhs_proj
-            if np.all(np.isclose(diff_proj, 0.0, atol=1e-7)):
-                cd_dim_succ += 1
+        
+        z_shape = [bkzgsa_gso_len(m*log(q),i, n+m-kappa,beta)**2 for i in range(n+m-kappa)]
+        r_vec = [G.get_r(i,i) for i in range(n+m-kappa)]
+        bdd_err_norm = expected_bdd_err_norm(n+m-kappa, dist_e, dist_s,  dist_param_s, dist_param_e)
 
-        results[cd] = {
-            "bab_fpylll_proj": int(cd_dim_succ),
-        }
 
-    elapsed_s = time.time() - t0
+        stats_full[beta][1] = full_dim_succ
+        stats_full[beta][2] += adm_probability2(n+m-kappa, r_vec, bdd_err_norm)
+        stats_full[beta][3] += adm_probability2(n+m-kappa, z_shape, bdd_err_norm)
+
+
+        # 9) Projected admissibility by cd
+        for cd in cds:
+            cd = int(cd)
+            cd_dim_succ = 0
+
+            for b_vec, s_vec, e_vec in bse_survivors:
+                sguess = s_vec[-kappa:]
+
+                w1 = np.concatenate([sguess[:kappa // 2], np.zeros(kappa // 2, dtype=int)])
+                w2 = np.concatenate([np.zeros(kappa // 2, dtype=int), sguess[kappa // 2:]])
+
+                target_w1 = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - w1 @ C
+                target_w2 = -w2 @ C
+
+                target_w1_proj = project_onto_last(G, target_w1, cd)
+                target_w2_proj = project_onto_last(G, target_w2, cd)
+
+                babai_res_w1_proj = G.babai(target_w1_proj)
+                err_w1_proj = target_w1_proj - G.B.multiply_left(babai_res_w1_proj)
+
+                babai_res_w2_proj = G.babai(target_w2_proj)
+                err_w2_proj = target_w2_proj - G.B.multiply_left(babai_res_w2_proj)
+
+                err_w1_proj_gs = np.asarray(G.from_canonical(err_w1_proj), dtype=float)[-cd:]
+                err_w2_proj_gs = np.asarray(G.from_canonical(err_w2_proj), dtype=float)[-cd:]
+
+                lhs_proj = np.asarray(
+                    G.from_canonical(np.concatenate([e_vec, -s_vec[:-kappa]])),
+                    dtype=float
+                )[-cd:] - err_w1_proj_gs
+                rhs_proj = err_w2_proj_gs
+
+                diff_proj = lhs_proj - rhs_proj
+                if np.all(np.isclose(diff_proj, 0.0, atol=1e-7)):
+                    cd_dim_succ += 1
+                    #err = [err_w1_proj_gs[i]+err_w1_proj_gs[i] for i in range(len(err_w1_proj_gs))]
+                    #print(err)
+                    #print(sqrt( sum([el*el for el in err])))
+
+            
+            #below is an overestimate, need to consider the distribution of the bdd error wrt the B^*
+            bdd_err_norm_proj = expected_bdd_err_norm(cd, dist_e, dist_s,  dist_param_s, dist_param_e)
+            #print("bdd_err_norm_proj:", bdd_err_norm_proj)
+            stats_proj[beta][cd][0] = cd_dim_succ
+            stats_proj[beta][cd][1] += adm_probability2(n+m-kappa, r_vec[-cd:], bdd_err_norm_proj)
+            stats_proj[beta][cd][2] += adm_probability2(n+m-kappa, z_shape[-cd:], bdd_err_norm_proj)
+
+
+        elapsed_s = time.time() - t0
+        #print("beta = ", beta, " finished for exp_id = ", exp_id)
+
 
     # 10) Collect everything that used to be printed, plus beta
     experiment_dict = {
@@ -258,15 +311,19 @@ def run_one_lattice(exp_id):
             "bkz_tours": int(bkz_tours),
             "lll_size": int(lll_size),
         },
-        "beta": int(beta),
-        "babai_lift_success": int(babai_lift_success),
-        "full_dim_succ": int(full_dim_succ),
-        "results": {
-            int(cd): {
-                k: as_python_int(v) for k, v in val.items()
-            }
-            for cd, val in results.items()
-        },
+        "results_fulldim": stats_full, # Don't know if stats_full dict will be pickled! 
+        "resulst_proj": stats_proj,
+        # "beta": int(beta),
+        # "babai_lift_success": int(babai_lift_success),
+        # "full_dim_succ": int(full_dim_succ),
+        # "results": 
+        
+        # "results": {
+        #     int(cd): {
+        #         k: as_python_int(v) for k, v in val.items()
+        #     }
+        #     for cd, val in results.items()
+        # },
         "elapsed_s": float(elapsed_s),
     }
 
@@ -274,6 +331,9 @@ def run_one_lattice(exp_id):
     out_path = experiments_dir / f"exp_{exp_id:04d}_{n}_{q}_{kappa}_{dist_s}_{dist_param_s}_{dist_e}_{dist_param_e}.pkl"
     with open(out_path, "wb") as f:
         pickle.dump(experiment_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    print("lattice #", exp_id, " finished")
+    
 
     return experiment_dict
 
@@ -284,18 +344,54 @@ def main():
 
     all_results = []
     with ProcessPoolExecutor(max_workers=max_workers) as ex:
-        futures = [ex.submit(run_one_lattice, exp_id) for exp_id in range(n_lattices)]
+        futures = [ex.submit(run_one_lattice, exp_id, beta_values) for exp_id in range(n_lattices)]
 
         for fut in as_completed(futures):
             res = fut.result()
             all_results.append(res)
 
-            print(
-                f"[exp {res['exp_id']}] beta={res['beta']}, "
-                f"babai_lift_success={res['babai_lift_success']}, "
-                f"full_dim_succ={res['full_dim_succ']}"
-            )
-            print(res["results"], flush=True)
+            # print(
+            #     f"[exp {res['exp_id']}] beta={res['beta']}, "
+            #     f"babai_lift_success={res['babai_lift_success']}, "
+            #     f"full_dim_succ={res['full_dim_succ']}"
+            # )
+            # print(res["results"], flush=True)
+
+
+    #print("All results:")
+    #print(all_results)
+
+
+    #combine stats from all lattices and normalize
+    stats_full = dict(  [ (beta, [0, 0, 0, 0] ) for beta in beta_values]  )
+    stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0]) for cd in cds ])) for beta in beta_values] )
+    for res in all_results:
+        for beta, l in res["results_fulldim"].items():
+            stats_full[beta][0] += int(l[0])
+            stats_full[beta][1] += int(l[1])
+            stats_full[beta][2] += float(l[2])
+            stats_full[beta][3] += float(l[3])
+        for beta in res["resulst_proj"].keys():
+            for cd, l in res["resulst_proj"][beta].items():
+                stats_proj[beta][cd][0] += int(l[0])
+                stats_proj[beta][cd][1] += float(l[1])
+                stats_proj[beta][cd][2] += float(l[2])
+
+    # take average
+    for beta in stats_full.keys():
+        for i in range(len(stats_full[beta])):
+            stats_full[beta][i]/=n_lattices
+    for beta in stats_proj.keys():
+        for cd in stats_proj[beta].keys():
+            for i in range(len(stats_proj[beta][cd])):
+                stats_proj[beta][cd][i]/=n_lattices
+
+    print("stats_full:")
+    print(stats_full)
+
+    print("stats_proj:")
+    print(stats_proj)
+
 
     # Optional combined dump
     combined = {

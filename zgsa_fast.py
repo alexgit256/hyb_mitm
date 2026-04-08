@@ -3,6 +3,8 @@
 
 
 from math import pi, exp, log, sqrt, erf
+from scipy import integrate
+from scipy.special import beta
 
 def GH_sv_factor_squared(k):
     return ((pi * k)**(1. / k) * k / (2. * pi * exp(1)))
@@ -114,6 +116,12 @@ def CN11(d, n, q, beta, xi=1, tau=1, dual=False, ignore_qary=False):
 
     return qary_simulator(f=f, d=d, n=n, q=q, beta=beta, xi=xi, tau=tau, dual=dual, ignore_qary=ignore_qary)
 
+def bkzgsa_gso_len(logvol, i, d, beta=None, delta=None):
+    if delta is None:
+        delta = compute_delta(beta)
+
+    return delta**(d - 1 - 2 * i) * exp(logvol / d)
+
 def plot_gso(r, *args, **kwds):
     return line([(i, r_,) for i, r_ in enumerate(r)], *args, **kwds)
 
@@ -122,7 +130,7 @@ def find_beta(d, n, q, st_dev_e):
     for beta in range(2, d//2, 1):
         gso_len = log(bkzgsa_gso_len(n*log(q), d-beta, d, beta=beta))
         lhs  = 0.5*log(beta)+log(st_dev_e)
-        if lhs < gso_len:
+        if lhs < 0.9*gso_len:
             return beta
     return float('inf')
 
@@ -199,3 +207,25 @@ def find_beta_for_adm_proj(d, n, q, dist_e, st_dev_e, target_succ_probability, c
             lo = mid + 1
 
     return lo
+
+def f_to_integrate(d, r):
+    j_to_integrate = lambda y, z: (1-y**2)**((d-3)/2.)
+    if r<0.5:
+        res =  integrate.dblquad(j_to_integrate, -r-1, r-1, -1, lambda z: z+r) + integrate.dblquad(j_to_integrate, r-1, -r, lambda z: z-r, lambda z: z+r)
+        assert(abs(res[1])<10e-4)
+        return res[0]
+    else:
+        res  = integrate.dblquad(j_to_integrate, -r-1, -r, -1, lambda z: z+r)
+        assert(abs(res[1])<10e-4)
+        return res[0]
+
+
+
+def adm_probability2(d, r, bdd_er_norm):
+    p = 1
+    beta_fn_value = beta((d-1)/2., 1./2)
+    for i in range(len(r)):
+        r_sq = sqrt(r[i])
+        r_scaled = r_sq/(2*bdd_er_norm)
+        p*=(1-f_to_integrate(d, r_scaled)/(r_scaled*beta_fn_value))
+    return p
