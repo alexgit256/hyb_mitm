@@ -220,7 +220,7 @@ def f_to_integrate(d, r):
         return res[0]
 
 
-
+# as per Eq(8) from https://eprint.iacr.org/2016/089.pdf
 def adm_probability2(d, r, bdd_er_norm):
     p = 1
     beta_fn_value = beta((d-1)/2., 1./2)

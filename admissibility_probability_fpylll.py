@@ -286,8 +286,8 @@ def run_one_lattice(exp_id, beta_values):
             bdd_err_norm_proj = expected_bdd_err_norm(cd, dist_e, dist_s,  dist_param_s, dist_param_e)
             #print("bdd_err_norm_proj:", bdd_err_norm_proj)
             stats_proj[beta][cd][0] = cd_dim_succ
-            stats_proj[beta][cd][1] += adm_probability2(n+m-kappa, r_vec[-cd:], bdd_err_norm_proj)
-            stats_proj[beta][cd][2] += adm_probability2(n+m-kappa, z_shape[-cd:], bdd_err_norm_proj)
+            stats_proj[beta][cd][1] += adm_probability2(cd, r_vec[-cd:], bdd_err_norm_proj)
+            stats_proj[beta][cd][2] += adm_probability2(cd, z_shape[-cd:], bdd_err_norm_proj)
 
 
         elapsed_s = time.time() - t0
