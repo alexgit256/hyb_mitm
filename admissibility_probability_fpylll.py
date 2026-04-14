@@ -4,12 +4,15 @@ import pickle
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+from math import sqrt, log
+import statistics
+
 import numpy as np
 from fpylll import IntegerMatrix, GSO, FPLLL
 
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
-from zgsa_fast import find_beta_for_adm_proj, find_beta, bkzgsa_gso_len, adm_probability2
+from zgsa_fast import find_beta_for_adm_proj, find_beta, bkzgsa_gso_len, adm_probability2, CN11
 from math import sqrt, log
 
 # ----------------------------
@@ -20,6 +23,53 @@ def project_onto_last(G, v, cd):
     v_gh = np.asarray(G.from_canonical(v), dtype=float)
     v_gh[:-cd] = 0
     return np.asarray(G.to_canonical(v_gh), dtype=float)
+
+def gs_projected_canonical_norm(G, v, cd):
+    """
+    Take a canonical vector v, project it onto the last cd Gram-Schmidt coordinates,
+    map back to canonical coordinates, and return its Euclidean norm.
+    """
+    vgs = np.asarray(G.from_canonical(v), dtype=float).copy()
+    vgs[:-cd] = 0.0
+    vproj = np.asarray(G.to_canonical(vgs), dtype=float)
+    return float(np.sqrt(vproj @ vproj))
+
+
+def summarize_prediction(pred, obs):
+    """
+    pred : scalar prediction
+    obs  : list of observed values
+    """
+    if not obs:
+        return {
+            "count": 0,
+            "pred": float(pred),
+            "mean_obs": None,
+            "std_obs": None,
+            "mae": None,
+            "rmse": None,
+            "bias": None,
+            "rel_mae_to_mean": None,
+        }
+
+    obs = [float(x) for x in obs]
+    errs = [x - pred for x in obs]
+    mae = sum(abs(e) for e in errs) / len(errs)
+    rmse = sqrt(sum(e * e for e in errs) / len(errs))
+    bias = sum(errs) / len(errs)
+    mean_obs = sum(obs) / len(obs)
+    std_obs = statistics.pstdev(obs) if len(obs) > 1 else 0.0
+
+    return {
+        "count": len(obs),
+        "pred": float(pred),
+        "mean_obs": float(mean_obs),
+        "std_obs": float(std_obs),
+        "mae": float(mae),
+        "rmse": float(rmse),
+        "bias": float(bias),
+        "rel_mae_to_mean": float(mae / mean_obs) if abs(mean_obs) > 1e-15 else None,
+    }
 
 
 def build_lwe_basis(A, n, m, q):
@@ -107,13 +157,13 @@ def expected_bdd_err_norm(d, dist_e, dist_s,  dist_param_s, dist_param_e):
 # ----------------------------
 FPLLL.set_precision(208)
 
-n, m, q = 100, 100, 3299
-dist_s, dist_param_s = "ternary", 1/3.
-dist_e, dist_param_e = "ternary", 1/3.
+n, m, q = 105, 105, 3299
+dist_s, dist_param_s = "binomial", 2
+dist_e, dist_param_e = "binomial", 2
 
 kappa = 40
 # Number of independent lattices / experiments
-n_lattices = 100
+n_lattices = 8
 n_targets = 100
 target_succ_probability = 0.005 #controls the blocksize of BKZ
 
@@ -129,7 +179,7 @@ beta_values = [beta_s+i*10 for i in range(7) if beta_s+i*10<65]
 print("beta values:", beta_values)
 
 # Parallelism over lattices
-max_workers = 5 #min(n_lattices, os.cpu_count() or 1)
+max_workers = 8 #min(n_lattices, os.cpu_count() or 1)
 
 # Output directory
 experiments_dir = Path("experiments")
@@ -173,6 +223,25 @@ def run_one_lattice(exp_id, beta_values):
     #for each beta and each cd, collect the same data as for stats_full except # babai success on full dim
     stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0]) for cd in cds ])) for beta in beta_values] )
 
+    lens_full = {
+        beta: {
+            "pred": expected_bdd_err_norm(n + m - kappa, dist_e, dist_s, dist_param_s, dist_param_e),
+            "obs": [],
+        }
+        for beta in beta_values
+    }
+
+    lens_proj = {
+        beta: {
+            int(cd): {
+                "pred": expected_bdd_err_norm(int(cd), dist_e, dist_s, dist_param_s, dist_param_e),
+                "obs": [],
+            }
+            for cd in cds
+        }
+        for beta in beta_values
+    }
+
     for beta in beta_values:
 
         # 5) Reduce basis
@@ -186,6 +255,7 @@ def run_one_lattice(exp_id, beta_values):
         bse_survivors = list(bse)
         babai_lift_success = 0
 
+        bdd_err_norm = expected_bdd_err_norm(n+m-kappa, dist_e, dist_s,  dist_param_s, dist_param_e)
         for i in range(len(bse_survivors) - 1, -1, -1):
             b_vec, s_vec, e_vec = bse_survivors[i]
 
@@ -199,8 +269,13 @@ def run_one_lattice(exp_id, beta_values):
             diff = tshift - np.concatenate([e_vec, -s_vec[:-kappa]])
             if np.all(np.isclose(diff, 0.0, atol=1e-7)):
                 babai_lift_success += 1
+                lens_full[beta]["obs"].append(
+                    float(np.sqrt(s_vec[-kappa:] @ s_vec[-kappa:] + e_vec @ e_vec))
+                ) #estimated vs factual norms
             else:
                 del bse_survivors[i]
+
+            
 
         stats_full[beta][0] = len(bse_survivors)
 
@@ -233,8 +308,11 @@ def run_one_lattice(exp_id, beta_values):
 
         
         z_shape = [bkzgsa_gso_len(m*log(q),i, n+m-kappa,beta)**2 for i in range(n+m-kappa)]
+
+        # z_shape = CN11( n+m-kappa,n-kappa,q,beta )
+
         r_vec = [G.get_r(i,i) for i in range(n+m-kappa)]
-        bdd_err_norm = expected_bdd_err_norm(n+m-kappa, dist_e, dist_s,  dist_param_s, dist_param_e)
+        # bdd_err_norm = expected_bdd_err_norm(n+m-kappa, dist_e, dist_s,  dist_param_s, dist_param_e)
 
 
         stats_full[beta][1] = full_dim_succ
@@ -277,14 +355,12 @@ def run_one_lattice(exp_id, beta_values):
                 diff_proj = lhs_proj - rhs_proj
                 if np.all(np.isclose(diff_proj, 0.0, atol=1e-7)):
                     cd_dim_succ += 1
-                    #err = [err_w1_proj_gs[i]+err_w1_proj_gs[i] for i in range(len(err_w1_proj_gs))]
-                    #print(err)
-                    #print(sqrt( sum([el*el for el in err])))
 
-            
-            #below is an overestimate, need to consider the distribution of the bdd error wrt the B^*
-            bdd_err_norm_proj = expected_bdd_err_norm(cd, dist_e, dist_s,  dist_param_s, dist_param_e)
-            #print("bdd_err_norm_proj:", bdd_err_norm_proj)
+                v = np.concatenate([-e_vec, s_vec])[:-kappa]
+                obs_proj_norm = gs_projected_canonical_norm(G, v, cd)
+                lens_proj[beta][cd]["obs"].append(obs_proj_norm)
+
+            bdd_err_norm_proj = lens_proj[beta][cd]["pred"]
             stats_proj[beta][cd][0] = cd_dim_succ
             stats_proj[beta][cd][1] += adm_probability2(cd, r_vec[-cd:], bdd_err_norm_proj)
             stats_proj[beta][cd][2] += adm_probability2(cd, z_shape[-cd:], bdd_err_norm_proj)
@@ -311,20 +387,10 @@ def run_one_lattice(exp_id, beta_values):
             "bkz_tours": int(bkz_tours),
             "lll_size": int(lll_size),
         },
-        "results_fulldim": stats_full, # Don't know if stats_full dict will be pickled! 
-        "resulst_proj": stats_proj,
-        # "beta": int(beta),
-        # "babai_lift_success": int(babai_lift_success),
-        # "full_dim_succ": int(full_dim_succ),
-        # "results": 
-        
-        # "results": {
-        #     int(cd): {
-        #         k: as_python_int(v) for k, v in val.items()
-        #     }
-        #     for cd, val in results.items()
-        # },
-        "elapsed_s": float(elapsed_s),
+        "results_fulldim": stats_full,
+        "result_proj": stats_proj,
+        "lens_full": lens_full,
+        "lens_proj": lens_proj,
     }
 
     # 11) Dump per-experiment pickle
@@ -365,17 +431,37 @@ def main():
     #combine stats from all lattices and normalize
     stats_full = dict(  [ (beta, [0, 0, 0, 0] ) for beta in beta_values]  )
     stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0]) for cd in cds ])) for beta in beta_values] )
+    lens_full_all = {
+        beta: {"pred": None, "obs": []}
+        for beta in beta_values
+    }
+    lens_proj_all = {
+        beta: {
+            int(cd): {"pred": None, "obs": []}
+            for cd in cds
+        }
+        for beta in beta_values
+    }
+
     for res in all_results:
         for beta, l in res["results_fulldim"].items():
             stats_full[beta][0] += int(l[0])
             stats_full[beta][1] += int(l[1])
             stats_full[beta][2] += float(l[2])
             stats_full[beta][3] += float(l[3])
-        for beta in res["resulst_proj"].keys():
-            for cd, l in res["resulst_proj"][beta].items():
+        for beta in res["result_proj"].keys():
+            for cd, l in res["result_proj"][beta].items():
                 stats_proj[beta][cd][0] += int(l[0])
                 stats_proj[beta][cd][1] += float(l[1])
                 stats_proj[beta][cd][2] += float(l[2])
+        for beta, d in res["lens_full"].items():
+            lens_full_all[beta]["pred"] = float(d["pred"])
+            lens_full_all[beta]["obs"].extend(float(x) for x in d["obs"])
+
+        for beta, dd in res["lens_proj"].items():
+            for cd, d in dd.items():
+                lens_proj_all[beta][cd]["pred"] = float(d["pred"])
+                lens_proj_all[beta][cd]["obs"].extend(float(x) for x in d["obs"])
 
     # take average
     for beta in stats_full.keys():
@@ -392,11 +478,41 @@ def main():
     print("stats_proj:")
     print(stats_proj)
 
+    print("lens_full:")
+    print(lens_full_all)
+
+    print("lens_proj:")
+    print(lens_proj_all)
+
+    lens_full_summary = {
+        beta: summarize_prediction(d["pred"], d["obs"])
+        for beta, d in lens_full_all.items()
+    }
+
+    lens_proj_summary = {
+        beta: {
+            cd: summarize_prediction(d["pred"], d["obs"])
+            for cd, d in dd.items()
+        }
+        for beta, dd in lens_proj_all.items()
+    }
+
+    print("lens_full_summary:")
+    print(lens_full_summary)
+
+    print("lens_proj_summary:")
+    print(lens_proj_summary)
 
     # Optional combined dump
     combined = {
         "n_lattices": int(n_lattices),
         "all_results": all_results,
+        "stats_full_avg": stats_full,
+        "stats_proj_avg": stats_proj,
+        "lens_full": lens_full_all,
+        "lens_proj": lens_proj_all,
+        "lens_full_summary": lens_full_summary,
+        "lens_proj_summary": lens_proj_summary,
     }
     combined_path = experiments_dir / "all_experiments.pkl"
     with open(combined_path, "wb") as f:

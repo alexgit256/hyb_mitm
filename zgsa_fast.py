@@ -90,7 +90,7 @@ def qary_simulator(f, d, n, q, beta, xi=1, tau=1, dual=False, ignore_qary=False)
 
 
 
-def CN11(d, n, q, beta, xi=1, tau=1, dual=False, ignore_qary=False):
+def CN11(d, n, q, beta, xi=1, tau=0, dual=False, ignore_qary=False):
     """
     Reduced lattice shape using simulator from [AC:CheNgu11]_
 
