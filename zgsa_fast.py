@@ -5,6 +5,8 @@
 from math import pi, exp, log, sqrt, erf
 from scipy import integrate
 from scipy.special import beta
+from math import ceil
+import numpy as np
 
 def GH_sv_factor_squared(k):
     return ((pi * k)**(1. / k) * k / (2. * pi * exp(1)))
@@ -124,6 +126,16 @@ def bkzgsa_gso_len(logvol, i, d, beta=None, delta=None):
 
 def plot_gso(r, *args, **kwds):
     return line([(i, r_,) for i, r_ in enumerate(r)], *args, **kwds)
+
+def discrete_gaussian_std(sigma, tailcut=8):
+    if sigma <= 0:
+        raise ValueError("sigma must be > 0")
+    B = max(1, ceil(tailcut * sigma))
+    xs = np.arange(-B, B + 1, dtype=np.float64)
+    ws = np.exp(-(xs**2) / (2.0 * sigma * sigma))
+    Z = ws.sum()
+    var = (xs**2 @ ws) / Z
+    return np.sqrt(var)
 
 #Thm. 4.1 from https://eprint.iacr.org/2025/1910.pdf
 def find_beta(d, n, q, st_dev_e):

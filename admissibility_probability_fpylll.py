@@ -15,6 +15,8 @@ from lattice_reduction import LatticeReduction
 from zgsa_fast import find_beta_for_adm_proj, find_beta, bkzgsa_gso_len, adm_probability2, CN11
 from math import sqrt, log
 
+from PT25 import expected_proj_norm
+
 # ----------------------------
 # Helpers
 # ----------------------------
@@ -94,11 +96,32 @@ def build_lwe_basis(A, n, m, q):
     return B
 
 
-def compute_beta(n, m, q, kappa, dist_param_e, cd):
+# def compute_beta(n, m, q, kappa, dist_e, dist_param_e, cd):
+#     """
+#     Keep the original beta logic.
+#     """
+#     beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
+#     # beta = find_beta_for_adm_proj(
+#     #     n+m-kappa, n, q, dist_e, dist_param_e, 
+#     #     target_succ_probability=target_succ_probability, 
+#     #     cd=cd)  #use this for gauss
+#     if beta > n:
+#         beta = 50
+#     return int(beta)
+
+def compute_beta(n, m, q, kappa, dist_e, dist_param_e, cd):
     """
     Keep the original beta logic.
     """
-    beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
+    if dist_e=="ternary":
+        beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
+    elif dist_e=="binomial":
+        beta = find_beta(n + m - kappa, n, q, dist_param_e/2)
+    elif dist_e in ["gaussian", "discrete_gaussian"]:
+        beta = find_beta(n + m - kappa, n, q, discrete_gaussian_std(dist_param_e))
+    else:
+        raise NotImplementedError(f"Dist {dist_e} not supported")
+    # beta+=25
     # beta = find_beta_for_adm_proj(
     #     n+m-kappa, n, q, dist_e, dist_param_e, 
     #     target_succ_probability=target_succ_probability, 
@@ -157,25 +180,26 @@ def expected_bdd_err_norm(d, dist_e, dist_s,  dist_param_s, dist_param_e):
 # ----------------------------
 FPLLL.set_precision(208)
 
-n, m, q = 105, 105, 3299
+n, m, q = 100, 100, 3299
 dist_s, dist_param_s = "binomial", 2
 dist_e, dist_param_e = "binomial", 2
 
-kappa = 40
+kappa = 25
 # Number of independent lattices / experiments
 n_lattices = 8
 n_targets = 100
 target_succ_probability = 0.005 #controls the blocksize of BKZ
 
 a, b, n_dims = 40, min(100, n + m - kappa), 4
-cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
+# cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
+cds = [50,75]
 print("cd values:", cds)
 
 bkz_tours = 5
 lll_size = 64
 # Compute beta
-beta_s = compute_beta(n, m, q, kappa, dist_param_e, cds[0])
-beta_values = [beta_s+i*10 for i in range(7) if beta_s+i*10<65]
+beta_s = compute_beta(n, m, q, kappa, dist_e, dist_param_e, cds[0]) + 6
+beta_values = [beta_s+i*10 for i in range(5) if beta_s+i*10<65]
 print("beta values:", beta_values)
 
 # Parallelism over lattices
@@ -225,16 +249,28 @@ def run_one_lattice(exp_id, beta_values):
 
     lens_full = {
         beta: {
-            "pred": expected_bdd_err_norm(n + m - kappa, dist_e, dist_s, dist_param_s, dist_param_e),
+            "pred": expected_bdd_err_norm(n + m - kappa, dist_e, dist_s, dist_param_s, dist_param_e), #2025/2195 is irrelevant w/o projection
             "obs": [],
         }
         for beta in beta_values
     }
 
+
+    # lens_proj = {
+    #     beta: {
+    #         int(cd): {
+    #             "pred":expected_proj_norm(n+m-kappa,lens_full[beta]["pred"],cd),   # "pred": expected_bdd_err_norm(int(cd), dist_e, dist_s, dist_param_s, dist_param_e),
+    #             "obs": [],
+    #         }
+    #         for cd in cds
+    #     }
+    #     for beta in beta_values
+    # }
+
     lens_proj = {
         beta: {
             int(cd): {
-                "pred": expected_bdd_err_norm(int(cd), dist_e, dist_s, dist_param_s, dist_param_e),
+                "pred":expected_proj_norm(n+m-kappa,lens_full[beta]["pred"],cd), 
                 "obs": [],
             }
             for cd in cds
@@ -255,7 +291,6 @@ def run_one_lattice(exp_id, beta_values):
         bse_survivors = list(bse)
         babai_lift_success = 0
 
-        bdd_err_norm = expected_bdd_err_norm(n+m-kappa, dist_e, dist_s,  dist_param_s, dist_param_e)
         for i in range(len(bse_survivors) - 1, -1, -1):
             b_vec, s_vec, e_vec = bse_survivors[i]
 
@@ -284,7 +319,7 @@ def run_one_lattice(exp_id, beta_values):
         for b_vec, s_vec, e_vec in bse_survivors:
             sguess = s_vec[-kappa:]
 
-            w1 = np.concatenate([sguess[:kappa // 2], np.zeros(kappa // 2, dtype=int)])
+            w1 = np.concatenate([sguess[:kappa // 2], np.zeros(len(sguess) - kappa // 2, dtype=int)])
             w2 = np.concatenate([np.zeros(kappa // 2, dtype=int), sguess[kappa // 2:]])
 
             target_w1 = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - w1 @ C
@@ -312,7 +347,7 @@ def run_one_lattice(exp_id, beta_values):
         # z_shape = CN11( n+m-kappa,n-kappa,q,beta )
 
         r_vec = [G.get_r(i,i) for i in range(n+m-kappa)]
-        # bdd_err_norm = expected_bdd_err_norm(n+m-kappa, dist_e, dist_s,  dist_param_s, dist_param_e)
+        bdd_err_norm = expected_bdd_err_norm(n+m-kappa, dist_e, dist_s,  dist_param_s, dist_param_e)
 
 
         stats_full[beta][1] = full_dim_succ
@@ -328,7 +363,7 @@ def run_one_lattice(exp_id, beta_values):
             for b_vec, s_vec, e_vec in bse_survivors:
                 sguess = s_vec[-kappa:]
 
-                w1 = np.concatenate([sguess[:kappa // 2], np.zeros(kappa // 2, dtype=int)])
+                w1 = np.concatenate([sguess[:kappa // 2], np.zeros(len(sguess) - kappa // 2, dtype=int)])
                 w2 = np.concatenate([np.zeros(kappa // 2, dtype=int), sguess[kappa // 2:]])
 
                 target_w1 = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - w1 @ C
@@ -387,6 +422,7 @@ def run_one_lattice(exp_id, beta_values):
             "bkz_tours": int(bkz_tours),
             "lll_size": int(lll_size),
         },
+        "beta": beta,
         "results_fulldim": stats_full,
         "result_proj": stats_proj,
         "lens_full": lens_full,
@@ -394,7 +430,7 @@ def run_one_lattice(exp_id, beta_values):
     }
 
     # 11) Dump per-experiment pickle
-    out_path = experiments_dir / f"exp_{exp_id:04d}_{n}_{q}_{kappa}_{dist_s}_{dist_param_s}_{dist_e}_{dist_param_e}.pkl"
+    out_path = experiments_dir / f"exp_fp_{exp_id:04d}_{n}_{q}_{kappa}_{dist_s}_{dist_param_s}_{dist_e}_{dist_param_e}.pkl"
     with open(out_path, "wb") as f:
         pickle.dump(experiment_dict, f, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -514,7 +550,7 @@ def main():
         "lens_full_summary": lens_full_summary,
         "lens_proj_summary": lens_proj_summary,
     }
-    combined_path = experiments_dir / "all_experiments.pkl"
+    combined_path = experiments_dir / "all_experiments_fp.pkl"
     with open(combined_path, "wb") as f:
         pickle.dump(combined, f, protocol=pickle.HIGHEST_PROTOCOL)
 
