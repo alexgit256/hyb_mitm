@@ -4,7 +4,7 @@ import pickle
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from math import sqrt, log
+from math import sqrt, log, lgamma, exp
 import statistics
 
 import numpy as np
@@ -159,40 +159,76 @@ def reduce_lattice(H, beta, lll_size, bkz_tours):
 def as_python_int(x):
     return int(x) if isinstance(x, (np.integer,)) else x
 
-def expected_bdd_err_norm(d, dist_e, dist_s,  dist_param_s, dist_param_e):
-    """
-    d : dimension of the bdd error (projected or non-projected)
-    return: expected Euclidean norm of the bdd error vector
-    TODO: generalize to different distributions
-    """
-    assert dist_e==dist_s and dist_param_s==dist_param_e 
-    if dist_e=="ternary":
-        return sqrt(d*2*dist_param_s)
-    elif dist_e=="discrete_gaussian":
-        return dist_param_e*sqrt(d)
-    elif dist_e=="binomial":
-        return sqrt(d)*dist_param_e/2. #ToDo: check: centered binomial variance: eta/2
+def discrete_gaussian_std(sigma, tailcut=10):
+    if sigma <= 0:
+        raise ValueError("sigma must be > 0")
+    B = max(1, ceil(tailcut * sigma))
+    xs = np.arange(-B, B + 1, dtype=np.float64)
+    ws = np.exp(-(xs**2) / (2.0 * sigma * sigma))
+    ws /= ws.sum()
+    var = np.dot(xs**2, ws)
+    return sqrt(var)
 
-    else: raise NotImplementedError(f"Distribution {dist_param_s!r} is not implemented in expected_bdd_err_norm.")
+# def expected_bdd_err_norm(d, dist_e, dist_s, dist_param_s, dist_param_e, mode="mean"):
+#     assert dist_e == dist_s and dist_param_s == dist_param_e
+
+#     if dist_e == "discrete_gaussian":
+#         sigma1 = discrete_gaussian_std(dist_param_e) / sqrt(2)
+#     elif dist_e == "binomial":
+#         sigma1 = sqrt(dist_param_e) / 2.0
+#     elif dist_e == "ternary":
+#         sigma1 = sqrt(dist_param_e)  # depends on your parametrization
+#     else:
+#         raise NotImplementedError(f"Distribution {dist_e!r} is not implemented.")
+
+#     if mode == "rms":
+#         return sigma1 * sqrt(d)
+#     elif mode == "mean":
+#         return sigma1 * sqrt(2.0) * exp(lgamma((d + 1) / 2.0) - lgamma(d / 2.0))
+#     elif mode == "mean_asymptotic":
+#         return sigma1 * sqrt(d - 0.5)
+#     else:
+#         raise ValueError("mode must be 'rms', 'mean', or 'mean_asymptotic'")
+
+def expected_bdd_err_norm(d, dist_e, dist_s, dist_param_s, dist_param_e, mode="mean"):
+    assert dist_e == dist_s and dist_param_s == dist_param_e
+
+    if dist_e == "discrete_gaussian":
+        sigma1 = discrete_gaussian_std(dist_param_e) #* sqrt(2)
+    elif dist_e == "binomial":
+        sigma1 = sqrt(dist_param_e) / sqrt( 2.0 )
+    elif dist_e == "ternary":
+        sigma1 = sqrt(dist_param_e) * sqrt(2.)  # depends on your parametrization
+    else:
+        raise NotImplementedError(f"Distribution {dist_e!r} is not implemented.")
+
+    if mode == "rms":
+        return sigma1 * sqrt(d)
+    elif mode == "mean":
+        return sigma1 * sqrt(2.0) * exp(lgamma((d + 1) / 2.0) - lgamma(d / 2.0))
+    elif mode == "mean_asymptotic":
+        return sigma1 * sqrt(d - 0.5)
+    else:
+        raise ValueError("mode must be 'rms', 'mean', or 'mean_asymptotic'")
 
 # ----------------------------
 # Configuration
 # ----------------------------
 FPLLL.set_precision(208)
 
-n, m, q = 100, 100, 3299
+n, m, q = 110, 110, 3329
 dist_s, dist_param_s = "binomial", 2
 dist_e, dist_param_e = "binomial", 2
 
 kappa = 25
 # Number of independent lattices / experiments
 n_lattices = 8
-n_targets = 100
+n_targets = 1000
 target_succ_probability = 0.005 #controls the blocksize of BKZ
 
 a, b, n_dims = 40, min(100, n + m - kappa), 4
-# cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
-cds = [50,75]
+cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
+# cds = [50,75]
 print("cd values:", cds)
 
 bkz_tours = 5
@@ -246,6 +282,9 @@ def run_one_lattice(exp_id, beta_values):
     # dictionary to collect statistic on projected lattices
     #for each beta and each cd, collect the same data as for stats_full except # babai success on full dim
     stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0]) for cd in cds ])) for beta in beta_values] )
+
+    print(f"- - - {(n + m - kappa, dist_e, dist_s, dist_param_s, dist_param_e)} - - -")
+    print(expected_bdd_err_norm(n + m - kappa, dist_e, dist_s, dist_param_s, dist_param_e))
 
     lens_full = {
         beta: {
@@ -304,13 +343,14 @@ def run_one_lattice(exp_id, beta_values):
             diff = tshift - np.concatenate([e_vec, -s_vec[:-kappa]])
             if np.all(np.isclose(diff, 0.0, atol=1e-7)):
                 babai_lift_success += 1
+                esvec = np.concatenate( [ e_vec, s_vec[-kappa:] ] ) #TODO: this potentially brings bias into the mean len of -e||s
                 lens_full[beta]["obs"].append(
-                    float(np.sqrt(s_vec[-kappa:] @ s_vec[-kappa:] + e_vec @ e_vec))
+                    float(np.sqrt(esvec @ esvec))
                 ) #estimated vs factual norms
             else:
                 del bse_survivors[i]
 
-            
+        # print(f" - - - b:{beta} | bls:{babai_lift_success} ")   
 
         stats_full[beta][0] = len(bse_survivors)
 
@@ -452,17 +492,6 @@ def main():
             res = fut.result()
             all_results.append(res)
 
-            # print(
-            #     f"[exp {res['exp_id']}] beta={res['beta']}, "
-            #     f"babai_lift_success={res['babai_lift_success']}, "
-            #     f"full_dim_succ={res['full_dim_succ']}"
-            # )
-            # print(res["results"], flush=True)
-
-
-    #print("All results:")
-    #print(all_results)
-
 
     #combine stats from all lattices and normalize
     stats_full = dict(  [ (beta, [0, 0, 0, 0] ) for beta in beta_values]  )
@@ -515,10 +544,15 @@ def main():
     print(stats_proj)
 
     print("lens_full:")
-    print(lens_full_all)
+    print( f"Observed: {np.mean( lens_full_all[beta]['obs'] )}" )
+    print( f"Predicted:{np.mean( lens_full_all[beta]['pred'] )}" )
+    # print(lens_full_all)
 
     print("lens_proj:")
-    print(lens_proj_all)
+    for cd in cds:
+        print(f"pred: {lens_proj_all[beta][cd]["pred"]}")
+        print(f"pred-cd-{cd}: {np.mean(lens_proj_all[beta][cd]["obs"])}")
+    # print(lens_proj_all)
 
     lens_full_summary = {
         beta: summarize_prediction(d["pred"], d["obs"])
