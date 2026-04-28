@@ -8,6 +8,8 @@ from scipy.special import beta
 from math import ceil
 import numpy as np
 
+from fpylll.util import gaussian_heuristic
+
 def GH_sv_factor_squared(k):
     return ((pi * k)**(1. / k) * k / (2. * pi * exp(1)))
 
@@ -223,7 +225,8 @@ def find_beta_for_adm_proj(d, n, q, dist_e, st_dev_e, target_succ_probability, c
 def f_to_integrate(d, r):
     j_to_integrate = lambda y, z: (1-y**2)**((d-3)/2.)
     if r<0.5:
-        res =  integrate.dblquad(j_to_integrate, -r-1, r-1, -1, lambda z: z+r) + integrate.dblquad(j_to_integrate, r-1, -r, lambda z: z-r, lambda z: z+r)
+        res =  np.array( integrate.dblquad(j_to_integrate, -r-1, r-1, -1, lambda z: z+r) ) +\
+             + np.array( integrate.dblquad(j_to_integrate, r-1, -r, lambda z: z-r, lambda z: z+r) )
         assert(abs(res[1])<10e-4)
         return res[0]
     else:

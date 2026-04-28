@@ -137,14 +137,13 @@ def reduce_lattice(H, beta, lll_size, bkz_tours):
     """
     LatRed_instance = LatticeReduction(H)
 
-    if beta > 49:
-        _ = LatRed_instance(
-            lll_size=lll_size,
-            delta=0.99,
-            cores=1,
-            beta=42,
-            bkz_tours=2,
-        )
+    _ = LatRed_instance(
+        lll_size=lll_size,
+        delta=0.99,
+        cores=1,
+        beta=min(beta,49),
+        bkz_tours=2,
+    )
 
     Hred = LatRed_instance(
         lll_size=lll_size,
@@ -234,7 +233,7 @@ print("cd values:", cds)
 bkz_tours = 5
 lll_size = 64
 # Compute beta
-beta_s = compute_beta(n, m, q, kappa, dist_e, dist_param_e, cds[0]) + 6
+beta_s = compute_beta(n, m, q, kappa, dist_e, dist_param_e, cds[0]) + 10
 beta_values = [beta_s+i*10 for i in range(5) if beta_s+i*10<65]
 print("beta values:", beta_values)
 
@@ -273,6 +272,7 @@ def run_one_lattice(exp_id, beta_values):
     # 3) Split basis as in original code
     Htmp = B[:len(B) - kappa]
     H = IntegerMatrix.from_matrix([row[:len(B) - kappa] for row in Htmp])
+    Hred = H
     C = np.array([row[:len(B) - kappa] for row in B[len(B) - kappa:]], dtype=np.int64)
 
     # dictionary to collect statistic on full lattice
@@ -295,16 +295,6 @@ def run_one_lattice(exp_id, beta_values):
     }
 
 
-    # lens_proj = {
-    #     beta: {
-    #         int(cd): {
-    #             "pred":expected_proj_norm(n+m-kappa,lens_full[beta]["pred"],cd),   # "pred": expected_bdd_err_norm(int(cd), dist_e, dist_s, dist_param_s, dist_param_e),
-    #             "obs": [],
-    #         }
-    #         for cd in cds
-    #     }
-    #     for beta in beta_values
-    # }
 
     lens_proj = {
         beta: {
@@ -320,7 +310,7 @@ def run_one_lattice(exp_id, beta_values):
     for beta in beta_values:
 
         # 5) Reduce basis
-        Hred = reduce_lattice(H, beta, lll_size, bkz_tours)
+        Hred = reduce_lattice(Hred, beta, lll_size, bkz_tours)
 
         # 6) Build GSO
         G = GSO.Mat(IntegerMatrix.from_matrix(Hred), float_type="mpfr")
