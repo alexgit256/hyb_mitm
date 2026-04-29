@@ -244,3 +244,68 @@ def adm_probability2(d, r, bdd_er_norm):
         r_scaled = r_sq/(2*bdd_er_norm)
         p*=(1-f_to_integrate(d, r_scaled)/(r_scaled*beta_fn_value))
     return p
+
+import math
+from math import erf, exp, sqrt
+from functools import reduce
+from operator import mul
+
+# https://github.com/ludopulles/mitm-estimator/blob/1d7a0f5f3508a20486fa554b3d754b2921c1cce1/estimator/prob.py#L82-L110
+def prod(values):
+    return reduce(mul, values, 1.0)
+
+
+def mitm_babai_probability(r, stddev, fast=False):
+    """
+    Compute the e-admissibility probability associated to the MitM step.
+
+    Parameters
+    ----------
+    r : iterable of float
+        Squared GSO lengths.
+    stddev : float
+        Standard deviation of the error distribution.
+    fast : bool or int
+        If False, compute the exact product.
+        If an integer, compute the last `fast` coordinates exactly and approximate
+        the remaining coordinates using the first exact probability.
+
+    Returns
+    -------
+    float
+        Probability for the MitM process.
+    """
+
+    c = 1.0 / sqrt(math.pi)
+
+    r = list(r)
+
+    if fast:
+        num_exact = min(int(fast), len(r))
+
+        xs = [
+            sqrt(0.5 * ri) / stddev
+            for ri in r[-num_exact:]
+        ]
+
+        ps = [
+            1.0 - c / x if x > 100.0
+            else erf(x) - c * (1.0 - exp(-x * x)) / x
+            for x in xs
+        ]
+
+        return ps[0] ** (len(r) - num_exact) * prod(ps)
+
+    # r contains squared norms, so convert to non-squared norms.
+    xs = [
+        sqrt(0.5 * ri) / stddev
+        for ri in r
+    ]
+
+    p = prod(
+        erf(x) - c * (1.0 - exp(-x * x)) / x
+        for x in xs
+    )
+
+    assert 0.0 <= p <= 1.0
+    return p

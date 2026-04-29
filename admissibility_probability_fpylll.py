@@ -12,7 +12,7 @@ from fpylll import IntegerMatrix, GSO, FPLLL
 
 from lwe_gen import generateLWEInstances
 from lattice_reduction import LatticeReduction
-from zgsa_fast import find_beta_for_adm_proj, find_beta, bkzgsa_gso_len, adm_probability2, CN11
+from zgsa_fast import find_beta_for_adm_proj, find_beta, bkzgsa_gso_len, adm_probability2, CN11, mitm_babai_probability
 from math import sqrt, log
 
 from PT25 import expected_proj_norm
@@ -121,13 +121,13 @@ def compute_beta(n, m, q, kappa, dist_e, dist_param_e, cd):
         beta = find_beta(n + m - kappa, n, q, discrete_gaussian_std(dist_param_e))
     else:
         raise NotImplementedError(f"Dist {dist_e} not supported")
-    # beta+=25
+
     # beta = find_beta_for_adm_proj(
     #     n+m-kappa, n, q, dist_e, dist_param_e, 
     #     target_succ_probability=target_succ_probability, 
     #     cd=cd)  #use this for gauss
     if beta > n:
-        beta = 50
+        beta = 80
     return int(beta)
 
 
@@ -148,7 +148,7 @@ def reduce_lattice(H, beta, lll_size, bkz_tours):
     Hred = LatRed_instance(
         lll_size=lll_size,
         delta=0.99,
-        cores=1,   # safer for multiprocessing; avoids oversubscription
+        cores=1 if ( (beta > 55 and beta < 65) or (beta > 75) ) else 2,
         beta=beta,
         bkz_tours=bkz_tours,
     )
@@ -225,7 +225,7 @@ n_lattices = 8
 n_targets = 1000
 target_succ_probability = 0.005 #controls the blocksize of BKZ
 
-a, b, n_dims = 40, min(100, n + m - kappa), 4
+a, b, n_dims = 30, min(100, n + m - kappa), 8
 cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
 # cds = [50,75]
 print("cd values:", cds)
@@ -234,7 +234,8 @@ bkz_tours = 5
 lll_size = 64
 # Compute beta
 beta_s = compute_beta(n, m, q, kappa, dist_e, dist_param_e, cds[0]) + 10
-beta_values = [beta_s+i*10 for i in range(5) if beta_s+i*10<65]
+BETA_HARD_CAP = 80
+beta_values = [beta_s+i*10 for i in range(5) if beta_s+i*10<BETA_HARD_CAP]
 print("beta values:", beta_values)
 
 # Parallelism over lattices
@@ -276,12 +277,18 @@ def run_one_lattice(exp_id, beta_values):
     C = np.array([row[:len(B) - kappa] for row in B[len(B) - kappa:]], dtype=np.int64)
 
     # dictionary to collect statistic on full lattice
-    # [# babai success on full dim, #succ admissibility on full dim, estimated adm. succ using exact R, estimated adm. succ using GSA]
-    stats_full = dict(  [ (beta, [0, 0, 0, 0] ) for beta in beta_values]  )
+    # [
+    # # babai success on full dim, 
+    # #succ admissibility on full dim, 
+    # estimated adm. succ using exact R, 
+    # estimated adm. succ using GSA
+    # estimated adm. succ using exact R (Ludo Pulles' code)
+    # ]
+    stats_full = dict(  [ (beta, [0, 0, 0, 0, 0] ) for beta in beta_values]  )
 
     # dictionary to collect statistic on projected lattices
     #for each beta and each cd, collect the same data as for stats_full except # babai success on full dim
-    stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0]) for cd in cds ])) for beta in beta_values] )
+    stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0, 0]) for cd in cds ])) for beta in beta_values] )
 
     print(f"- - - {(n + m - kappa, dist_e, dist_s, dist_param_s, dist_param_e)} - - -")
     print(expected_bdd_err_norm(n + m - kappa, dist_e, dist_s, dist_param_s, dist_param_e))
@@ -383,6 +390,7 @@ def run_one_lattice(exp_id, beta_values):
         stats_full[beta][1] = full_dim_succ
         stats_full[beta][2] += adm_probability2(n+m-kappa, r_vec, bdd_err_norm)
         stats_full[beta][3] += adm_probability2(n+m-kappa, z_shape, bdd_err_norm)
+        stats_full[beta][4] += mitm_babai_probability(r_vec, bdd_err_norm/sqrt(n+m-kappa)) #approx sigma as ||v|| / sqrt(dim)
 
 
         # 9) Projected admissibility by cd
@@ -429,6 +437,7 @@ def run_one_lattice(exp_id, beta_values):
             stats_proj[beta][cd][0] = cd_dim_succ
             stats_proj[beta][cd][1] += adm_probability2(cd, r_vec[-cd:], bdd_err_norm_proj)
             stats_proj[beta][cd][2] += adm_probability2(cd, z_shape[-cd:], bdd_err_norm_proj)
+            stats_proj[beta][cd][3] += mitm_babai_probability(r_vec[-cd:], bdd_err_norm_proj/sqrt(cd))
 
 
         elapsed_s = time.time() - t0

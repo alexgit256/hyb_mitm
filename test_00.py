@@ -114,25 +114,25 @@ def assert_near_integers(W_cand: np.ndarray, *, atol=1e-8, rtol=0.0):
 n = 144
 
 # uncomment the lines below to generate and reduce A from the scratch
-# A = IntegerMatrix(n,n)
-# A.randomize("qary", k=n//2, bits=14.2)
+A = IntegerMatrix(n,n)
+A.randomize("qary", k=n//2, bits=14.2)
 
-# t0 = perf_counter()
-# LR = LatticeReduction( A )
-# print(f"flatter done in: {perf_counter()-t0}")
+t0 = perf_counter()
+LR = LatticeReduction( A )
+print(f"flatter done in: {perf_counter()-t0}")
 
-# for beta in [14,40,24,30,66]:
-#     t0 = perf_counter()
-#     LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
-#     print(f"BKZ-{beta} done in: {perf_counter()-t0}")
-# for beta in range(40,43):
-#     t0 = perf_counter()
-#     LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
-#     print(f"BKZ-{beta} done in: {perf_counter()-t0}")
+for beta in [14,40,24,30,66]:
+    t0 = perf_counter()
+    LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
+    print(f"BKZ-{beta} done in: {perf_counter()-t0}")
+for beta in range(40,43):
+    t0 = perf_counter()
+    LR( cores=10, beta=beta, bkz_tours=2, verbose  = True )
+    print(f"BKZ-{beta} done in: {perf_counter()-t0}")
 
-# A = np.array( list(line for line in LR.B) ).transpose()
-# print(A)
-# write_lattice( A, output_file=f"lattst_{n}.txt" )
+A = np.array( list(line for line in LR.B) ).transpose()
+print(A)
+write_lattice( A, output_file=f"lattst_{n}.txt" )
 
 A = read_lattice( f"lattst_{n}.txt" )
 
