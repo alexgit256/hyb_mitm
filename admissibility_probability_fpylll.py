@@ -115,6 +115,8 @@ def compute_beta(n, m, q, kappa, dist_e, dist_param_e, cd):
     """
     if dist_e=="ternary":
         beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
+    if dist_e=="ternary_sparse":
+        beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
     elif dist_e=="binomial":
         beta = find_beta(n + m - kappa, n, q, dist_param_e/2)
     elif dist_e in ["gaussian", "discrete_gaussian"]:
@@ -197,7 +199,9 @@ def expected_bdd_err_norm(d, dist_e, dist_s, dist_param_s, dist_param_e, mode="m
     elif dist_e == "binomial":
         sigma1 = sqrt(dist_param_e) / sqrt( 2.0 )
     elif dist_e == "ternary":
-        sigma1 = sqrt(dist_param_e) * sqrt(2.)  # depends on your parametrization
+        sigma1 = sqrt(dist_param_e) * sqrt(2.)  # depends on parametrization
+    elif dist_e == "binary":
+        sigma1 = sqrt( dist_param_e )
     else:
         raise NotImplementedError(f"Distribution {dist_e!r} is not implemented.")
 
@@ -221,8 +225,8 @@ dist_e, dist_param_e = "binomial", 2
 
 kappa = 25
 # Number of independent lattices / experiments
-n_lattices = 8
-n_targets = 1000
+n_lattices = 20
+n_targets = 5000
 target_succ_probability = 0.005 #controls the blocksize of BKZ
 
 a, b, n_dims = 30, min(100, n + m - kappa), 8

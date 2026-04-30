@@ -250,6 +250,7 @@ from math import erf, exp, sqrt
 from functools import reduce
 from operator import mul
 
+# adaptation of:
 # https://github.com/ludopulles/mitm-estimator/blob/1d7a0f5f3508a20486fa554b3d754b2921c1cce1/estimator/prob.py#L82-L110
 def prod(values):
     return reduce(mul, values, 1.0)

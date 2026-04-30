@@ -45,6 +45,18 @@ def ternary_sparse_vec(n, k, rng=None):
     v[idx] = rng.choice([-1, 1], size=k)
     return v
 
+def binary_vec(n, w, rng=None):
+    """
+    For 0 <= w <= 1, each coordinate is:
+      1 with prob w,
+      0 with prob 1-w.
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    if not (0 <= w <= 1.0):
+        raise ValueError("ternary parameter w must satisfy 0 <= w <= 1/2")
+    return rng.choice([1, 0], size=n, p=[w, 1 - w])
+
 
 def uniform_vec(n, a, b, rng=None):
     if rng is None:
@@ -102,6 +114,9 @@ def _sample_vec(dist, dim, param, rng=None):
 
     if key == "ternary_sparse":
         return ternary_sparse_vec(dim, param, rng=rng)
+    
+    if key == "binary":
+        return binary_vec(dim, param, rng=rng)
 
     if key in ("gaussian", "continuous_gaussian", "normal"):
         return continuous_gaussian_vec(dim, param, rng=rng)
