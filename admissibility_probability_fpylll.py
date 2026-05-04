@@ -119,6 +119,8 @@ def compute_beta(n, m, q, kappa, dist_e, dist_param_e, cd):
         beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
     elif dist_e=="binomial":
         beta = find_beta(n + m - kappa, n, q, dist_param_e/2)
+    elif dist_e=="binary":
+        beta = find_beta(n + m - kappa, n, q, dist_param_e)
     elif dist_e in ["gaussian", "discrete_gaussian"]:
         beta = find_beta(n + m - kappa, n, q, discrete_gaussian_std(dist_param_e))
     else:
@@ -170,26 +172,6 @@ def discrete_gaussian_std(sigma, tailcut=10):
     var = np.dot(xs**2, ws)
     return sqrt(var)
 
-# def expected_bdd_err_norm(d, dist_e, dist_s, dist_param_s, dist_param_e, mode="mean"):
-#     assert dist_e == dist_s and dist_param_s == dist_param_e
-
-#     if dist_e == "discrete_gaussian":
-#         sigma1 = discrete_gaussian_std(dist_param_e) / sqrt(2)
-#     elif dist_e == "binomial":
-#         sigma1 = sqrt(dist_param_e) / 2.0
-#     elif dist_e == "ternary":
-#         sigma1 = sqrt(dist_param_e)  # depends on your parametrization
-#     else:
-#         raise NotImplementedError(f"Distribution {dist_e!r} is not implemented.")
-
-#     if mode == "rms":
-#         return sigma1 * sqrt(d)
-#     elif mode == "mean":
-#         return sigma1 * sqrt(2.0) * exp(lgamma((d + 1) / 2.0) - lgamma(d / 2.0))
-#     elif mode == "mean_asymptotic":
-#         return sigma1 * sqrt(d - 0.5)
-#     else:
-#         raise ValueError("mode must be 'rms', 'mean', or 'mean_asymptotic'")
 
 def expected_bdd_err_norm(d, dist_e, dist_s, dist_param_s, dist_param_e, mode="mean"):
     assert dist_e == dist_s and dist_param_s == dist_param_e
@@ -218,15 +200,17 @@ def expected_bdd_err_norm(d, dist_e, dist_s, dist_param_s, dist_param_e, mode="m
 # Configuration
 # ----------------------------
 FPLLL.set_precision(208)
+# Parallelism over lattices
+max_workers = 8 #min(n_lattices, os.cpu_count() or 1)
 
 n, m, q = 110, 110, 3329
-dist_s, dist_param_s = "binomial", 2
-dist_e, dist_param_e = "binomial", 2
+dist_s, dist_param_s = "binary", 0.5
+dist_e, dist_param_e = "binary", 0.5
 
 kappa = 25
 # Number of independent lattices / experiments
-n_lattices = 20
-n_targets = 5000
+n_lattices = 8
+n_targets = 1000
 target_succ_probability = 0.005 #controls the blocksize of BKZ
 
 a, b, n_dims = 30, min(100, n + m - kappa), 8
@@ -237,13 +221,12 @@ print("cd values:", cds)
 bkz_tours = 5
 lll_size = 64
 # Compute beta
-beta_s = compute_beta(n, m, q, kappa, dist_e, dist_param_e, cds[0]) + 10
+beta_s = compute_beta(n, m, q, kappa, dist_e, dist_param_e, cds[0])+10
 BETA_HARD_CAP = 80
 beta_values = [beta_s+i*10 for i in range(5) if beta_s+i*10<BETA_HARD_CAP]
 print("beta values:", beta_values)
 
-# Parallelism over lattices
-max_workers = 8 #min(n_lattices, os.cpu_count() or 1)
+
 
 # Output directory
 experiments_dir = Path("experiments")
@@ -267,7 +250,7 @@ def run_one_lattice(exp_id, beta_values):
         n, m, q,
         dist_s, dist_param_s,
         dist_e, dist_param_e,
-        n_targets,
+        n_targets, seed=exp_id,
     )
     assert len(bse) == n_targets
 
