@@ -7,9 +7,9 @@ FPLLL.set_random_seed(0x1337)
 from math import sqrt, ceil, floor, log, exp
 from copy import deepcopy
 
-from blaster_core import \
+from blaster._core import \
     set_debug_flag, set_num_cores, block_lll, block_deep_lll, block_bkz, ZZ_right_matmul
-from size_reduction import nearest_plane
+from blaster.size_reduction import nearest_plane
 
 # try:
 #     from multiprocess import Pool  # you might need pip install multiprocess

@@ -9,11 +9,11 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import ArtistAnimation, PillowWriter
 
 # Local imports
-from blaster_core import \
+from blaster._core import \
     set_debug_flag, set_num_cores, block_lll, block_deep_lll, block_bkz, ZZ_right_matmul
-from size_reduction import is_lll_reduced, is_weakly_lll_reduced, size_reduce, seysen_reduce, nearest_plane
-from stats import get_profile, rhf, slope, potential
-from lattice_io import read_qary_lattice, write_lattice
+from blaster.size_reduction import is_lll_reduced, is_weakly_lll_reduced, size_reduce, seysen_reduce, nearest_plane
+from blaster.stats import get_profile, rhf, slope, potential
+from blaster.lattice_io import read_qary_lattice, write_lattice
 
 from random import randrange, uniform
 

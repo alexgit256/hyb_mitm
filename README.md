@@ -10,11 +10,9 @@ First, create the ``blaster_dev`` conda environment. It should support conda for
     git clone https://github.com/ludopulles/BLASter.git
     cd ./BLASter/
     make eigen3
-    make
-    cp ../setup.py.true ./setup.py
     pip install setuptools
     pip install cython
-    pip install cysignals numpy setuptools matplotlib
+    pip install cysignals numpy setuptools matplotlib scipy 
 
     # - - - MacOS only - - -
     brew install llvm libomp
