@@ -17,6 +17,8 @@ from math import sqrt, log
 
 from PT25 import expected_proj_norm
 
+from time import perf_counter
+
 # ----------------------------
 # Helpers
 # ----------------------------
@@ -135,7 +137,7 @@ def compute_beta(n, m, q, kappa, dist_e, dist_param_e, cd):
     return int(beta)
 
 
-def reduce_lattice(H, beta, lll_size, bkz_tours):
+def reduce_lattice(H, beta, lll_size, bkz_tours, cores=1):
     """
     Apply the same preprocessing / reduction strategy as your script.
     """
@@ -149,13 +151,29 @@ def reduce_lattice(H, beta, lll_size, bkz_tours):
         bkz_tours=2,
     )
 
+    if beta > 50:
+        for bbeta in range(50,beta):
+             print( f"Doing BKZ-{bbeta}" )
+             t0 = perf_counter()
+             _ = LatRed_instance(
+                lll_size=lll_size,
+                delta=0.99,
+                cores=cores,
+                beta=bbeta,
+                bkz_tours=2,
+            )
+             print( f"BKZ-{bbeta} done in {perf_counter()-t0}" )
+
+    t0 = perf_counter()
+    print( f"Doing last BKZ-{beta}" )
     Hred = LatRed_instance(
         lll_size=lll_size,
         delta=0.99,
-        cores=1 if ( (beta > 55 and beta < 65) or (beta > 75) ) else 2,
+        cores=1 if (beta < 55) else cores,
         beta=beta,
         bkz_tours=bkz_tours,
     )
+    print( f"BKZ-{beta} done in {perf_counter()-t0}" )
     return Hred
 
 
@@ -203,7 +221,7 @@ FPLLL.set_precision(208)
 # Parallelism over lattices
 max_workers = 8 #min(n_lattices, os.cpu_count() or 1)
 
-n, m, q = 110, 110, 3329
+n, m, q = 130, 130, 3329
 dist_s, dist_param_s = "binary", 0.5
 dist_e, dist_param_e = "binary", 0.5
 
@@ -304,7 +322,7 @@ def run_one_lattice(exp_id, beta_values):
     for beta in beta_values:
 
         # 5) Reduce basis
-        Hred = reduce_lattice(Hred, beta, lll_size, bkz_tours)
+        Hred = reduce_lattice(Hred, beta, lll_size, bkz_tours, cores=2)
 
         # 6) Build GSO
         G = GSO.Mat(IntegerMatrix.from_matrix(Hred), float_type="mpfr")
