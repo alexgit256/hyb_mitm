@@ -28,7 +28,8 @@ try:
   from g6k.algorithms.bkz import pump_n_jump_bkz_tour
   from g6k.utils.stats import dummy_tracer
   G6K_IMPORTED = True
-except ImportError:
+except ImportError as err:
+    print(err)
     pass
 #   raise ImportError("g6k not installed")
 

@@ -35,8 +35,8 @@ First, create the ``blaster_dev`` conda environment. It should support conda for
     git checkout ac_artifact
     make clean
     ./configure CXX=/usr/bin/g++
-    python setup.py build_ext --inplace
+    python -m pip install -e . --no-build-isolation -v
     
 ```
 
-This also needs ``https://github.com/ElenaKirshanova/g6k_hybrid/tree/ac_artifact``
+This also needs flatter.
