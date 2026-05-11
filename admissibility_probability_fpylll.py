@@ -1,218 +1,156 @@
-import os
-import time
-import pickle
+import time, pickle
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-from math import sqrt, log, lgamma, exp
-import statistics
+from math import sqrt, log
 
 import numpy as np
 from fpylll import IntegerMatrix, GSO, FPLLL
 
 from lwe_gen import generateLWEInstances
-from lattice_reduction import LatticeReduction
-from zgsa_fast import find_beta_for_adm_proj, find_beta, bkzgsa_gso_len, adm_probability2, CN11, mitm_babai_probability
+
+from zgsa_fast import bkzgsa_gso_len, adm_probability2, CN11, mitm_babai_probability
+from admissibility_helpers import (
+    project_onto_last, gs_projected_canonical_norm, split_secret_guess, 
+    split_secret_guess, lwe_target, babai_residual, filter_babai_lift_survivors,
+    summarize_prediction, expected_bdd_err_norm, compute_beta,
+    build_partitioned_basis, reduce_lattice
+)
 from math import sqrt, log
-
 from PT25 import expected_proj_norm
-
 from time import perf_counter
 
-# ----------------------------
-# Helpers
-# ----------------------------
-def project_onto_last(G, v, cd):
-    assert cd <= G.d, f"Too large dim {cd}>{G.d}"
-    v_gh = np.asarray(G.from_canonical(v), dtype=float)
-    v_gh[:-cd] = 0
-    return np.asarray(G.to_canonical(v_gh), dtype=float)
 
-def gs_projected_canonical_norm(G, v, cd):
-    """
-    Take a canonical vector v, project it onto the last cd Gram-Schmidt coordinates,
-    map back to canonical coordinates, and return its Euclidean norm.
-    """
-    vgs = np.asarray(G.from_canonical(v), dtype=float).copy()
-    vgs[:-cd] = 0.0
-    vproj = np.asarray(G.to_canonical(vgs), dtype=float)
-    return float(np.sqrt(vproj @ vproj))
+# - - - Full dim loop replacement - - -
+def check_full_admissibility(G, b_vec, s_vec, e_vec, C, n, kappa, atol=1e-7):
+    sguess = s_vec[-kappa:]
+    w1, w2 = split_secret_guess(sguess, kappa)
 
+    target_w1 = lwe_target(b_vec, w1, C, n, kappa)
+    target_w2 = -w2 @ C
 
-def summarize_prediction(pred, obs):
-    """
-    pred : scalar prediction
-    obs  : list of observed values
-    """
-    if not obs:
-        return {
-            "count": 0,
-            "pred": float(pred),
-            "mean_obs": None,
-            "std_obs": None,
-            "mae": None,
-            "rmse": None,
-            "bias": None,
-            "rel_mae_to_mean": None,
-        }
+    err_w1_gs = np.asarray(G.from_canonical(babai_residual(G, target_w1)), dtype=float)
+    err_w2_gs = np.asarray(G.from_canonical(babai_residual(G, target_w2)), dtype=float)
 
-    obs = [float(x) for x in obs]
-    errs = [x - pred for x in obs]
-    mae = sum(abs(e) for e in errs) / len(errs)
-    rmse = sqrt(sum(e * e for e in errs) / len(errs))
-    bias = sum(errs) / len(errs)
-    mean_obs = sum(obs) / len(obs)
-    std_obs = statistics.pstdev(obs) if len(obs) > 1 else 0.0
+    true_err_gs = np.asarray(
+        G.from_canonical(np.concatenate([e_vec, -s_vec[:-kappa]])),
+        dtype=float,
+    )
+
+    return np.all(np.isclose(true_err_gs - err_w1_gs - err_w2_gs, 0.0, atol=atol))
+
+def compute_full_dimension_admissibility(
+    G,
+    bse_survivors,
+    C,
+    n,
+    m,
+    q,
+    kappa,
+    beta,
+    dist_e,
+    dist_s,
+    dist_param_s,
+    dist_param_e,
+    atol=1e-7,
+):
+    d = n + m - kappa
+
+    full_dim_succ = sum(
+        check_full_admissibility(G, b_vec, s_vec, e_vec, C, n, kappa, atol=atol)
+        for b_vec, s_vec, e_vec in bse_survivors
+    )
+
+    r_vec = [G.get_r(i, i) for i in range(d)]
+    z_shape = [bkzgsa_gso_len(m * log(q), i, d, beta) ** 2 for i in range(d)]
+    bdd_err_norm = expected_bdd_err_norm(
+        d, dist_e, dist_s, dist_param_s, dist_param_e
+    )
 
     return {
-        "count": len(obs),
-        "pred": float(pred),
-        "mean_obs": float(mean_obs),
-        "std_obs": float(std_obs),
-        "mae": float(mae),
-        "rmse": float(rmse),
-        "bias": float(bias),
-        "rel_mae_to_mean": float(mae / mean_obs) if abs(mean_obs) > 1e-15 else None,
+        "successes": full_dim_succ,
+        "prob_exact_r": adm_probability2(d, r_vec, bdd_err_norm),
+        "prob_gsa": adm_probability2(d, z_shape, bdd_err_norm),
+        "prob_mitm_babai": mitm_babai_probability(r_vec, bdd_err_norm / sqrt(d)),
+        "r_vec": r_vec,
+        "z_shape": z_shape,
+        "bdd_err_norm": bdd_err_norm,
     }
 
+# - - - Projected dim loop replecement - - -
 
-def build_lwe_basis(A, n, m, q):
-    """
-    Build the standard q-ary lattice basis:
-        [ q I_m ]
-        [  A    I_n ]
-    in row form.
-    """
-    B = [[0 for _ in range(m + n)] for _ in range(m + n)]
+def check_projected_admissibility(
+    G, b_vec, s_vec, e_vec, C, n, kappa, cd, atol=1e-7
+):
+    sguess = s_vec[-kappa:]
+    w1, w2 = split_secret_guess(sguess, kappa)
 
-    for i in range(m):
-        B[i][i] = int(q)
+    target_w1 = lwe_target(b_vec, w1, C, n, kappa)
+    target_w2 = -w2 @ C
 
-    for i in range(m, m + n):
-        B[i][i] = 1
+    target_w1_proj = project_onto_last(G, target_w1, cd)
+    target_w2_proj = project_onto_last(G, target_w2, cd)
 
-    for i in range(m, m + n):
-        for j in range(m):
-            B[i][j] = int(A[i - m, j])
+    err_w1_proj_gs = np.asarray(
+        G.from_canonical(babai_residual(G, target_w1_proj)),
+        dtype=float,
+    )[-cd:]
 
-    return B
+    err_w2_proj_gs = np.asarray(
+        G.from_canonical(babai_residual(G, target_w2_proj)),
+        dtype=float,
+    )[-cd:]
 
+    true_err_proj_gs = np.asarray(
+        G.from_canonical(np.concatenate([e_vec, -s_vec[:-kappa]])),
+        dtype=float,
+    )[-cd:]
 
-# def compute_beta(n, m, q, kappa, dist_e, dist_param_e, cd):
-#     """
-#     Keep the original beta logic.
-#     """
-#     beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
-#     # beta = find_beta_for_adm_proj(
-#     #     n+m-kappa, n, q, dist_e, dist_param_e, 
-#     #     target_succ_probability=target_succ_probability, 
-#     #     cd=cd)  #use this for gauss
-#     if beta > n:
-#         beta = 50
-#     return int(beta)
-
-def compute_beta(n, m, q, kappa, dist_e, dist_param_e, cd):
-    """
-    Keep the original beta logic.
-    """
-    if dist_e=="ternary":
-        beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
-    if dist_e=="ternary_sparse":
-        beta = find_beta(n + m - kappa, n, q, 3 * dist_param_e) #use this for ternary
-    elif dist_e=="binomial":
-        beta = find_beta(n + m - kappa, n, q, dist_param_e/2)
-    elif dist_e=="binary":
-        beta = find_beta(n + m - kappa, n, q, dist_param_e)
-    elif dist_e in ["gaussian", "discrete_gaussian"]:
-        beta = find_beta(n + m - kappa, n, q, discrete_gaussian_std(dist_param_e))
-    else:
-        raise NotImplementedError(f"Dist {dist_e} not supported")
-
-    # beta = find_beta_for_adm_proj(
-    #     n+m-kappa, n, q, dist_e, dist_param_e, 
-    #     target_succ_probability=target_succ_probability, 
-    #     cd=cd)  #use this for gauss
-    if beta > n:
-        beta = 80
-    return int(beta)
-
-
-def reduce_lattice(H, beta, lll_size, bkz_tours, cores=1):
-    """
-    Apply the same preprocessing / reduction strategy as your script.
-    """
-    LatRed_instance = LatticeReduction(H)
-
-    _ = LatRed_instance(
-        lll_size=lll_size,
-        delta=0.99,
-        cores=1,
-        beta=min(beta,49),
-        bkz_tours=2,
+    return np.all(
+        np.isclose(true_err_proj_gs - err_w1_proj_gs - err_w2_proj_gs, 0.0, atol=atol)
     )
 
-    if beta > 50:
-        for bbeta in range(50,beta):
-             print( f"Doing BKZ-{bbeta}" )
-             t0 = perf_counter()
-             _ = LatRed_instance(
-                lll_size=lll_size,
-                delta=0.99,
-                cores=cores,
-                beta=bbeta,
-                bkz_tours=2,
+def compute_projected_admissibility_by_cd(
+    G,
+    bse_survivors,
+    C,
+    n,
+    kappa,
+    cds,
+    r_vec,
+    z_shape,
+    lens_proj_beta,
+    atol=1e-7,
+):
+    result = {}
+
+    for cd in map(int, cds):
+        successes = 0
+        obs_norms = []
+
+        for b_vec, s_vec, e_vec in bse_survivors:
+            ok = check_projected_admissibility(
+                G, b_vec, s_vec, e_vec, C, n, kappa, cd, atol=atol
             )
-             print( f"BKZ-{bbeta} done in {perf_counter()-t0}" )
 
-    t0 = perf_counter()
-    print( f"Doing last BKZ-{beta}" )
-    Hred = LatRed_instance(
-        lll_size=lll_size,
-        delta=0.99,
-        cores=1 if (beta < 55) else cores,
-        beta=beta,
-        bkz_tours=bkz_tours,
-    )
-    print( f"BKZ-{beta} done in {perf_counter()-t0}" )
-    return Hred
+            if ok:
+                successes += 1
+                v = np.concatenate([-e_vec, s_vec])[:-kappa]
+                obs_norms.append(gs_projected_canonical_norm(G, v, cd))
 
+        bdd_err_norm_proj = lens_proj_beta[cd]["pred"]
 
-def as_python_int(x):
-    return int(x) if isinstance(x, (np.integer,)) else x
+        result[cd] = {
+            "successes": successes,
+            "prob_exact_r": adm_probability2(cd, r_vec[-cd:], bdd_err_norm_proj),
+            "prob_gsa": adm_probability2(cd, z_shape[-cd:], bdd_err_norm_proj),
+            "prob_mitm_babai": mitm_babai_probability(
+                r_vec[-cd:], bdd_err_norm_proj / sqrt(cd)
+            ),
+            "obs_norms": obs_norms,
+        }
 
-def discrete_gaussian_std(sigma, tailcut=10):
-    if sigma <= 0:
-        raise ValueError("sigma must be > 0")
-    B = max(1, ceil(tailcut * sigma))
-    xs = np.arange(-B, B + 1, dtype=np.float64)
-    ws = np.exp(-(xs**2) / (2.0 * sigma * sigma))
-    ws /= ws.sum()
-    var = np.dot(xs**2, ws)
-    return sqrt(var)
-
-
-def expected_bdd_err_norm(d, dist_e, dist_s, dist_param_s, dist_param_e, mode="mean"):
-    assert dist_e == dist_s and dist_param_s == dist_param_e
-
-    if dist_e == "discrete_gaussian":
-        sigma1 = discrete_gaussian_std(dist_param_e) #* sqrt(2)
-    elif dist_e == "binomial":
-        sigma1 = sqrt(dist_param_e) / sqrt( 2.0 )
-    elif dist_e == "ternary":
-        sigma1 = sqrt(dist_param_e) * sqrt(2.)  # depends on parametrization
-    elif dist_e == "binary":
-        sigma1 = sqrt( dist_param_e )
-    else:
-        raise NotImplementedError(f"Distribution {dist_e!r} is not implemented.")
-
-    if mode == "rms":
-        return sigma1 * sqrt(d)
-    elif mode == "mean":
-        return sigma1 * sqrt(2.0) * exp(lgamma((d + 1) / 2.0) - lgamma(d / 2.0))
-    elif mode == "mean_asymptotic":
-        return sigma1 * sqrt(d - 0.5)
-    else:
-        raise ValueError("mode must be 'rms', 'mean', or 'mean_asymptotic'")
+    return result
 
 # ----------------------------
 # Configuration
@@ -221,17 +159,17 @@ FPLLL.set_precision(208)
 # Parallelism over lattices
 max_workers = 8 #min(n_lattices, os.cpu_count() or 1)
 
-n, m, q = 130, 130, 3329
+n, m, q = 80, 80, 3329
 dist_s, dist_param_s = "binary", 0.5
 dist_e, dist_param_e = "binary", 0.5
 
 kappa = 25
 # Number of independent lattices / experiments
-n_lattices = 8
-n_targets = 1000
+n_lattices = 4
+n_targets = 500
 target_succ_probability = 0.005 #controls the blocksize of BKZ
 
-a, b, n_dims = 30, min(100, n + m - kappa), 8
+a, b, n_dims = 30, min(100, n + m - kappa), 4
 cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
 # cds = [50,75]
 print("cd values:", cds)
@@ -241,7 +179,7 @@ lll_size = 64
 # Compute beta
 beta_s = compute_beta(n, m, q, kappa, dist_e, dist_param_e, cds[0])+10
 BETA_HARD_CAP = 80
-beta_values = [beta_s+i*10 for i in range(5) if beta_s+i*10<BETA_HARD_CAP]
+beta_values = [beta_s+i*10 for i in range(2) if beta_s+i*10<BETA_HARD_CAP]
 print("beta values:", beta_values)
 
 
@@ -273,13 +211,15 @@ def run_one_lattice(exp_id, beta_values):
     assert len(bse) == n_targets
 
     # 2) Build lattice basis
-    B = build_lwe_basis(A, n, m, q)
+    # B = build_lwe_basis(A, n, m, q)
 
-    # 3) Split basis as in original code
-    Htmp = B[:len(B) - kappa]
-    H = IntegerMatrix.from_matrix([row[:len(B) - kappa] for row in Htmp])
-    Hred = H
-    C = np.array([row[:len(B) - kappa] for row in B[len(B) - kappa:]], dtype=np.int64)
+    # # 3) Split basis as in original code
+    # Htmp = B[:len(B) - kappa]
+    # H = IntegerMatrix.from_matrix([row[:len(B) - kappa] for row in Htmp])
+    # Hred = H
+    # C = np.array([row[:len(B) - kappa] for row in B[len(B) - kappa:]], dtype=np.int64)
+
+    Hred, C =  build_partitioned_basis(A, n, m, q, kappa)
 
     # dictionary to collect statistic on full lattice
     # [
@@ -306,8 +246,6 @@ def run_one_lattice(exp_id, beta_values):
         for beta in beta_values
     }
 
-
-
     lens_proj = {
         beta: {
             int(cd): {
@@ -332,117 +270,45 @@ def run_one_lattice(exp_id, beta_values):
         bse_survivors = list(bse)
         babai_lift_success = 0
 
-        for i in range(len(bse_survivors) - 1, -1, -1):
-            b_vec, s_vec, e_vec = bse_survivors[i]
+        bse_survivors, babai_lift_success, obs_norms = filter_babai_lift_survivors(
+            G, bse, C, n, kappa
+        )
 
-            sguess = s_vec[-kappa:]
-            sguess_times_C = sguess @ C
-            target = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - sguess_times_C
-
-            babai_res = G.babai(target)
-            tshift = target - G.B.multiply_left(babai_res)
-
-            diff = tshift - np.concatenate([e_vec, -s_vec[:-kappa]])
-            if np.all(np.isclose(diff, 0.0, atol=1e-7)):
-                babai_lift_success += 1
-                esvec = np.concatenate( [ e_vec, s_vec[-kappa:] ] ) #TODO: this potentially brings bias into the mean len of -e||s
-                lens_full[beta]["obs"].append(
-                    float(np.sqrt(esvec @ esvec))
-                ) #estimated vs factual norms
-            else:
-                del bse_survivors[i]
+        stats_full[beta][0] = babai_lift_success
+        lens_full[beta]["obs"].extend(obs_norms)
 
         # print(f" - - - b:{beta} | bls:{babai_lift_success} ")   
 
         stats_full[beta][0] = len(bse_survivors)
 
-        # 8) Full-dimension admissibility
-        full_dim_succ = 0
-        for b_vec, s_vec, e_vec in bse_survivors:
-            sguess = s_vec[-kappa:]
+        full = compute_full_dimension_admissibility(
+            G, bse_survivors, C, n, m, q, kappa, beta,
+            dist_e, dist_s, dist_param_s, dist_param_e,
+        )
 
-            w1 = np.concatenate([sguess[:kappa // 2], np.zeros(len(sguess) - kappa // 2, dtype=int)])
-            w2 = np.concatenate([np.zeros(kappa // 2, dtype=int), sguess[kappa // 2:]])
+        stats_full[beta][1] = full["successes"]
+        stats_full[beta][2] += full["prob_exact_r"]
+        stats_full[beta][3] += full["prob_gsa"]
+        stats_full[beta][4] += full["prob_mitm_babai"]
 
-            target_w1 = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - w1 @ C
-            target_w2 = -w2 @ C
+        proj = compute_projected_admissibility_by_cd(
+        G,
+        bse_survivors,
+        C,
+        n,
+        kappa,
+        cds,
+        full["r_vec"],
+        full["z_shape"],
+        lens_proj[beta],
+    )
 
-            babai_res_w1 = G.babai(target_w1)
-            err_w1 = target_w1 - G.B.multiply_left(babai_res_w1)
-
-            babai_res_w2 = G.babai(target_w2)
-            err_w2 = target_w2 - G.B.multiply_left(babai_res_w2)
-
-            err_w1_gs = np.asarray(G.from_canonical(err_w1), dtype=float)
-            err_w2_gs = np.asarray(G.from_canonical(err_w2), dtype=float)
-
-            lhs = np.asarray(G.from_canonical(np.concatenate([e_vec, -s_vec[:-kappa]])), dtype=float) - err_w1_gs
-            rhs = err_w2_gs
-
-            diff = lhs - rhs
-            if np.all(np.isclose(diff, 0.0, atol=1e-7)):
-                full_dim_succ += 1
-
-        
-        z_shape = [bkzgsa_gso_len(m*log(q),i, n+m-kappa,beta)**2 for i in range(n+m-kappa)]
-
-        # z_shape = CN11( n+m-kappa,n-kappa,q,beta )
-
-        r_vec = [G.get_r(i,i) for i in range(n+m-kappa)]
-        bdd_err_norm = expected_bdd_err_norm(n+m-kappa, dist_e, dist_s,  dist_param_s, dist_param_e)
-
-
-        stats_full[beta][1] = full_dim_succ
-        stats_full[beta][2] += adm_probability2(n+m-kappa, r_vec, bdd_err_norm)
-        stats_full[beta][3] += adm_probability2(n+m-kappa, z_shape, bdd_err_norm)
-        stats_full[beta][4] += mitm_babai_probability(r_vec, bdd_err_norm/sqrt(n+m-kappa)) #approx sigma as ||v|| / sqrt(dim)
-
-
-        # 9) Projected admissibility by cd
-        for cd in cds:
-            cd = int(cd)
-            cd_dim_succ = 0
-
-            for b_vec, s_vec, e_vec in bse_survivors:
-                sguess = s_vec[-kappa:]
-
-                w1 = np.concatenate([sguess[:kappa // 2], np.zeros(len(sguess) - kappa // 2, dtype=int)])
-                w2 = np.concatenate([np.zeros(kappa // 2, dtype=int), sguess[kappa // 2:]])
-
-                target_w1 = np.concatenate([b_vec, np.zeros(n - kappa, dtype=int)]) - w1 @ C
-                target_w2 = -w2 @ C
-
-                target_w1_proj = project_onto_last(G, target_w1, cd)
-                target_w2_proj = project_onto_last(G, target_w2, cd)
-
-                babai_res_w1_proj = G.babai(target_w1_proj)
-                err_w1_proj = target_w1_proj - G.B.multiply_left(babai_res_w1_proj)
-
-                babai_res_w2_proj = G.babai(target_w2_proj)
-                err_w2_proj = target_w2_proj - G.B.multiply_left(babai_res_w2_proj)
-
-                err_w1_proj_gs = np.asarray(G.from_canonical(err_w1_proj), dtype=float)[-cd:]
-                err_w2_proj_gs = np.asarray(G.from_canonical(err_w2_proj), dtype=float)[-cd:]
-
-                lhs_proj = np.asarray(
-                    G.from_canonical(np.concatenate([e_vec, -s_vec[:-kappa]])),
-                    dtype=float
-                )[-cd:] - err_w1_proj_gs
-                rhs_proj = err_w2_proj_gs
-
-                diff_proj = lhs_proj - rhs_proj
-                if np.all(np.isclose(diff_proj, 0.0, atol=1e-7)):
-                    cd_dim_succ += 1
-
-                v = np.concatenate([-e_vec, s_vec])[:-kappa]
-                obs_proj_norm = gs_projected_canonical_norm(G, v, cd)
-                lens_proj[beta][cd]["obs"].append(obs_proj_norm)
-
-            bdd_err_norm_proj = lens_proj[beta][cd]["pred"]
-            stats_proj[beta][cd][0] = cd_dim_succ
-            stats_proj[beta][cd][1] += adm_probability2(cd, r_vec[-cd:], bdd_err_norm_proj)
-            stats_proj[beta][cd][2] += adm_probability2(cd, z_shape[-cd:], bdd_err_norm_proj)
-            stats_proj[beta][cd][3] += mitm_babai_probability(r_vec[-cd:], bdd_err_norm_proj/sqrt(cd))
+    for cd, row in proj.items():
+        stats_proj[beta][cd][0] = row["successes"]
+        stats_proj[beta][cd][1] += row["prob_exact_r"]
+        stats_proj[beta][cd][2] += row["prob_gsa"]
+        stats_proj[beta][cd][3] += row["prob_mitm_babai"]
+        lens_proj[beta][cd]["obs"].extend(row["obs_norms"])
 
 
         elapsed_s = time.time() - t0

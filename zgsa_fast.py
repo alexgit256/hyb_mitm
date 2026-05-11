@@ -7,8 +7,10 @@ from scipy import integrate
 from scipy.special import beta
 from math import ceil
 import numpy as np
-
-from fpylll.util import gaussian_heuristic
+import math
+from math import erf, exp, sqrt
+from functools import reduce
+from operator import mul
 
 def GH_sv_factor_squared(k):
     return ((pi * k)**(1. / k) * k / (2. * pi * exp(1)))
@@ -168,21 +170,6 @@ def adm_probability(r,alpha=None,q=None,mode="ternary"):
                 return 0
     return p
 
-# #only for ternary
-# def find_beta_for_adm(d, n, q, st_dev_e, target_succ_probability):
-#     for beta in range(2, d-10, 1):
-#         gso_len = ZGSA(d,n,q, beta)
-#         if adm_probability([exp(RR(2*i)) for i in gso_len])>=target_succ_probability:
-#             return beta
-#     return float('inf')
-
-# def find_beta_for_adm_proj(d, n, q, st_dev_e, target_succ_probability,cd):
-#     for beta in range(2, d-10, 1):
-#         gso_len = ZGSA(d,n,q, beta)
-#         if adm_probability([exp(min(128,RR(2*i))) for i in gso_len[-cd:]])>=target_succ_probability:
-#             return beta
-#     return float('inf')
-
 def find_beta_for_adm_proj(d, n, q, dist_e, st_dev_e, target_succ_probability, cd):
     """
     Find the smallest beta in [2, d-10) such that
@@ -244,11 +231,6 @@ def adm_probability2(d, r, bdd_er_norm):
         r_scaled = r_sq/(2*bdd_er_norm)
         p*=(1-f_to_integrate(d, r_scaled)/(r_scaled*beta_fn_value))
     return p
-
-import math
-from math import erf, exp, sqrt
-from functools import reduce
-from operator import mul
 
 # adaptation of:
 # https://github.com/ludopulles/mitm-estimator/blob/1d7a0f5f3508a20486fa554b3d754b2921c1cce1/estimator/prob.py#L82-L110
