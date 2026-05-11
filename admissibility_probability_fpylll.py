@@ -14,7 +14,7 @@ from admissibility_helpers import (
     project_onto_last, gs_projected_canonical_norm, split_secret_guess, 
     split_secret_guess, lwe_target, babai_residual, filter_babai_lift_survivors,
     summarize_prediction, expected_bdd_err_norm, compute_beta,
-    build_partitioned_basis, reduce_lattice
+    build_partitioned_basis, reduce_lattice, fill_zero_projected_results
 )
 from math import sqrt, log
 from PT25 import expected_proj_norm
@@ -110,6 +110,7 @@ def check_projected_admissibility(
         np.isclose(true_err_proj_gs - err_w1_proj_gs - err_w2_proj_gs, 0.0, atol=atol)
     )
 
+
 def compute_projected_admissibility_by_cd(
     G,
     bse_survivors,
@@ -123,25 +124,26 @@ def compute_projected_admissibility_by_cd(
     atol=1e-7,
 ):
     result = {}
+    cds_sorted = sorted(map(int, cds))
+    active = list(bse_survivors)
 
-    for cd in map(int, cds):
-        successes = 0
+    for cd_pos, cd in enumerate(cds_sorted):
+        next_active = []
         obs_norms = []
 
-        for b_vec, s_vec, e_vec in bse_survivors:
-            ok = check_projected_admissibility(
+        for b_vec, s_vec, e_vec in active:
+            if check_projected_admissibility(
                 G, b_vec, s_vec, e_vec, C, n, kappa, cd, atol=atol
-            )
+            ):
+                next_active.append((b_vec, s_vec, e_vec))  #if we fail for some cd there's no need to call babai for larger cd
 
-            if ok:
-                successes += 1
                 v = np.concatenate([-e_vec, s_vec])[:-kappa]
                 obs_norms.append(gs_projected_canonical_norm(G, v, cd))
 
         bdd_err_norm_proj = lens_proj_beta[cd]["pred"]
 
         result[cd] = {
-            "successes": successes,
+            "successes": len(next_active),
             "prob_exact_r": adm_probability2(cd, r_vec[-cd:], bdd_err_norm_proj),
             "prob_gsa": adm_probability2(cd, z_shape[-cd:], bdd_err_norm_proj),
             "prob_mitm_babai": mitm_babai_probability(
@@ -149,6 +151,18 @@ def compute_projected_admissibility_by_cd(
             ),
             "obs_norms": obs_norms,
         }
+
+        active = next_active
+
+        if not active:
+            fill_zero_projected_results(
+                result,
+                cds_sorted[cd_pos + 1:],
+                r_vec,
+                z_shape,
+                lens_proj_beta,
+            )
+            break
 
     return result
 
@@ -209,15 +223,6 @@ def run_one_lattice(exp_id, beta_values):
         n_targets, seed=exp_id,
     )
     assert len(bse) == n_targets
-
-    # 2) Build lattice basis
-    # B = build_lwe_basis(A, n, m, q)
-
-    # # 3) Split basis as in original code
-    # Htmp = B[:len(B) - kappa]
-    # H = IntegerMatrix.from_matrix([row[:len(B) - kappa] for row in Htmp])
-    # Hred = H
-    # C = np.array([row[:len(B) - kappa] for row in B[len(B) - kappa:]], dtype=np.int64)
 
     Hred, C =  build_partitioned_basis(A, n, m, q, kappa)
 
