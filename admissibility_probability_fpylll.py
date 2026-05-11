@@ -124,26 +124,39 @@ def compute_projected_admissibility_by_cd(
     atol=1e-7,
 ):
     result = {}
+
     cds_sorted = sorted(map(int, cds))
+
+    # All vectors that survived the full Babai-lift stage.
+    # These are the denominator / norm-sample population.
+    all_survivors = list(bse_survivors)
+
+    # Active vectors are only for admissibility checking.
+    # Once a vector fails at cd0, it need not be Babai-checked for larger cd.
     active = list(bse_survivors)
 
-    for cd_pos, cd in enumerate(cds_sorted):
-        next_active = []
+    for cd in cds_sorted:
+        # Collect observed projected norms for all Babai-lift survivors,
+        # not only for projected-admissibility successes.
         obs_norms = []
+        for b_vec, s_vec, e_vec in all_survivors:
+            v = np.concatenate([-e_vec, s_vec])[:-kappa]
+            obs_norms.append(gs_projected_canonical_norm(G, v, cd))
+
+        next_active = []
 
         for b_vec, s_vec, e_vec in active:
             if check_projected_admissibility(
                 G, b_vec, s_vec, e_vec, C, n, kappa, cd, atol=atol
             ):
-                next_active.append((b_vec, s_vec, e_vec))  #if we fail for some cd there's no need to call babai for larger cd
-
-                v = np.concatenate([-e_vec, s_vec])[:-kappa]
-                obs_norms.append(gs_projected_canonical_norm(G, v, cd))
+                next_active.append((b_vec, s_vec, e_vec))
 
         bdd_err_norm_proj = lens_proj_beta[cd]["pred"]
 
         result[cd] = {
             "successes": len(next_active),
+            "checked": len(active),
+            "norm_count": len(obs_norms),
             "prob_exact_r": adm_probability2(cd, r_vec[-cd:], bdd_err_norm_proj),
             "prob_gsa": adm_probability2(cd, z_shape[-cd:], bdd_err_norm_proj),
             "prob_mitm_babai": mitm_babai_probability(
@@ -154,16 +167,6 @@ def compute_projected_admissibility_by_cd(
 
         active = next_active
 
-        if not active:
-            fill_zero_projected_results(
-                result,
-                cds_sorted[cd_pos + 1:],
-                r_vec,
-                z_shape,
-                lens_proj_beta,
-            )
-            break
-
     return result
 
 # ----------------------------
@@ -173,17 +176,16 @@ FPLLL.set_precision(208)
 # Parallelism over lattices
 max_workers = 8 #min(n_lattices, os.cpu_count() or 1)
 
-n, m, q = 80, 80, 3329
+n, m, q = 100, 100, 3329
 dist_s, dist_param_s = "binary", 0.5
 dist_e, dist_param_e = "binary", 0.5
 
 kappa = 25
 # Number of independent lattices / experiments
 n_lattices = 4
-n_targets = 500
-target_succ_probability = 0.005 #controls the blocksize of BKZ
+n_targets = 2000
 
-a, b, n_dims = 30, min(100, n + m - kappa), 4
+a, b, n_dims = 30, min(60, n + m - kappa), 8
 cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
 # cds = [50,75]
 print("cd values:", cds)
@@ -193,7 +195,8 @@ lll_size = 64
 # Compute beta
 beta_s = compute_beta(n, m, q, kappa, dist_e, dist_param_e, cds[0])+10
 BETA_HARD_CAP = 80
-beta_values = [beta_s+i*10 for i in range(2) if beta_s+i*10<BETA_HARD_CAP]
+beta_values = [beta_s+i*10 for i in range(4) if beta_s+i*10<BETA_HARD_CAP]
+
 print("beta values:", beta_values)
 
 
@@ -284,8 +287,6 @@ def run_one_lattice(exp_id, beta_values):
 
         # print(f" - - - b:{beta} | bls:{babai_lift_success} ")   
 
-        stats_full[beta][0] = len(bse_survivors)
-
         full = compute_full_dimension_admissibility(
             G, bse_survivors, C, n, m, q, kappa, beta,
             dist_e, dist_s, dist_param_s, dist_param_e,
@@ -306,18 +307,18 @@ def run_one_lattice(exp_id, beta_values):
         full["r_vec"],
         full["z_shape"],
         lens_proj[beta],
-    )
+        )
 
-    for cd, row in proj.items():
-        stats_proj[beta][cd][0] = row["successes"]
-        stats_proj[beta][cd][1] += row["prob_exact_r"]
-        stats_proj[beta][cd][2] += row["prob_gsa"]
-        stats_proj[beta][cd][3] += row["prob_mitm_babai"]
-        lens_proj[beta][cd]["obs"].extend(row["obs_norms"])
+        for cd, row in proj.items():
+            stats_proj[beta][cd][0] = row["successes"]
+            stats_proj[beta][cd][1] += row["prob_exact_r"]
+            stats_proj[beta][cd][2] += row["prob_gsa"]
+            stats_proj[beta][cd][3] += row["prob_mitm_babai"]
+            lens_proj[beta][cd]["obs"].extend(row["obs_norms"])
 
 
-        elapsed_s = time.time() - t0
-        #print("beta = ", beta, " finished for exp_id = ", exp_id)
+            elapsed_s = time.time() - t0
+            #print("beta = ", beta, " finished for exp_id = ", exp_id)
 
 
     # 10) Collect everything that used to be printed, plus beta
@@ -370,7 +371,7 @@ def main():
 
     #combine stats from all lattices and normalize
     stats_full = dict(  [ (beta, [0, 0, 0, 0] ) for beta in beta_values]  )
-    stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0]) for cd in cds ])) for beta in beta_values] )
+    stats_proj = dict( [ (beta, dict([ (int(cd), [0, 0, 0, 0]) for cd in cds ])) for beta in beta_values] )
     lens_full_all = {
         beta: {"pred": None, "obs": []}
         for beta in beta_values
@@ -394,6 +395,7 @@ def main():
                 stats_proj[beta][cd][0] += int(l[0])
                 stats_proj[beta][cd][1] += float(l[1])
                 stats_proj[beta][cd][2] += float(l[2])
+                stats_proj[beta][cd][3] += float(l[3])
         for beta, d in res["lens_full"].items():
             lens_full_all[beta]["pred"] = float(d["pred"])
             lens_full_all[beta]["obs"].extend(float(x) for x in d["obs"])
