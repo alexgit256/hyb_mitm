@@ -185,7 +185,7 @@ kappa = 25
 n_lattices = 4
 n_targets = 2000
 
-a, b, n_dims = 30, min(60, n + m - kappa), 8
+a, b, n_dims = 30, min(100, n + m - kappa), 8
 cds = np.asarray(np.round(np.linspace(a, b, n_dims)), dtype=int)
 # cds = [50,75]
 print("cd values:", cds)

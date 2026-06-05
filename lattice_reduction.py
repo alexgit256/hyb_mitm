@@ -72,8 +72,6 @@ def flatter_interface(fpylllB, *, flatter_bin="flatter", tmpdir=None, keep_files
         B = IntegerMatrix.from_file(out_path)
 
         if keep_files:
-            # If you want to keep them, move them out before the temp dir is deleted.
-            # Easiest: copy elsewhere or raise the directory path to caller.
             raise RuntimeError(f"keep_files=True: temp files are in {d}")
 
         return B
@@ -82,6 +80,7 @@ def flatter_interface(fpylllB, *, flatter_bin="flatter", tmpdir=None, keep_files
 class LatticeReduction:
     def __init__(self,B):
         self.B = flatter_interface( IntegerMatrix.from_matrix( B ) )
+        # self.B = ( IntegerMatrix.from_matrix( B ) )
 
     def LLL(self, B=None, lll_size=64, delta: float = 0.99,
         start=0, end=None, cores=1, use_seysen=True):
